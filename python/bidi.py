@@ -268,7 +268,7 @@ def unicode_wrap(global_dir, text):
   approval = sanitize.IActuallyUnderstandSoyTypeSafetyAndHaveSecurityApproval(
       'Persisting existing sanitizations.')
   if sanitize.is_content_kind(text, sanitize.CONTENT_KIND.TEXT):
-    return sanitize.UnsanitizedText(wrapped_text, wrapped_text_dir)
+    return sanitize.UnsanitizedText(wrapped_text)
   if is_html:
     return sanitize.SanitizedHtml(wrapped_text, wrapped_text_dir,
                                   approval=approval)
@@ -284,6 +284,23 @@ def unicode_wrap(global_dir, text):
   # either.
   return wrapped_text
 
+
+def bidi_end_edge(d):
+  if d < 0:
+    return 'left'
+  return 'right'
+
+
+def bidi_start_edge(d):
+  if d < 0:
+    return 'right'
+  return 'left'
+
+
+def bidi_mark(d):
+  if d < 0:
+    return '\u200F'
+  return '\u200E'
 
 ###########
 # Classes #

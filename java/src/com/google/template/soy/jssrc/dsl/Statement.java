@@ -44,13 +44,13 @@ public abstract class Statement extends CodeChunk {
   }
 
   /** Creates a code chunk that assigns value to a preexisting variable with the given name. */
-  public static Statement assign(String varName, Expression rhs) {
-    return Assignment.create(varName, rhs, null);
+  public static Statement assign(Expression lhs, Expression rhs) {
+    return Assignment.create(lhs, rhs, null);
   }
 
   /** Creates a code chunk that assigns and prints jsDoc above the assignment. */
-  public static Statement assign(String varName, Expression rhs, JsDoc jsDoc) {
-    return Assignment.create(varName, rhs, jsDoc);
+  public static Statement assign(Expression lhs, Expression rhs, JsDoc jsDoc) {
+    return Assignment.create(lhs, rhs, jsDoc);
   }
 
   /** Starts a {@code switch} statement dispatching on the given chunk. */
@@ -79,6 +79,11 @@ public abstract class Statement extends CodeChunk {
     return Return.create(returnValue);
   }
 
+  /** Creates a code chunk that represents an empty return statement. */
+  public static Statement returnNothing() {
+    return Return.create();
+  }
+
   /** Creates a code chunk that represents a throw statement. */
   public static Statement throwValue(Expression throwValue) {
     return Throw.create(throwValue);
@@ -89,7 +94,7 @@ public abstract class Statement extends CodeChunk {
    * expression. For use only by {@link
    * com.google.template.soy.jssrc.internal.GenJsCodeVisitor#visitReturningCodeChunk}.
    *
-   * <p>TODO(user): remove.
+   * <p>TODO(b/33382980): remove.
    */
   public static Statement treatRawStringAsStatementLegacyOnly(
       String rawString, Iterable<GoogRequire> requires) {

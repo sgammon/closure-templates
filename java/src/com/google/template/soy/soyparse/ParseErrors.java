@@ -170,6 +170,8 @@ final class ParseErrors {
         return "{namespace";
       case SoyFileParserConstants.TEMPLATE_OPEN:
         return "{template";
+      case SoyFileParserConstants.ELEMENT_OPEN:
+        return "{element";
       case SoyFileParserConstants.EOF:
         return "eof";
 
@@ -206,23 +208,14 @@ final class ParseErrors {
         return null; // want to exclude this from expectation messages
       case SoyFileParserConstants.CMD_BEGIN_PRINT:
         return "{print";
+      case SoyFileParserConstants.CMD_BEGIN_KEY:
+        return "{key";
 
       case SoyFileParserConstants.NAME:
       case SoyFileParserConstants.IDENT:
         return "identifier";
-      case SoyFileParserConstants.DATA_ATTR_DQ:
-      case SoyFileParserConstants.DATA_ATTR_SQ:
-      case SoyFileParserConstants.GENDERS_ATTR_DQ:
-      case SoyFileParserConstants.GENDERS_ATTR_SQ:
-      case SoyFileParserConstants.LOGONLY_ATTR_DQ:
-      case SoyFileParserConstants.LOGONLY_ATTR_SQ:
-      case SoyFileParserConstants.VARIANT_ATTR_DQ:
-      case SoyFileParserConstants.VARIANT_ATTR_SQ:
-        return "attribute name";
       case SoyFileParserConstants.SQ_ATTRIBUTE_VALUE:
       case SoyFileParserConstants.DQ_ATTRIBUTE_VALUE:
-      case SoyFileParserConstants.EQ_DOUBLE_QUOTE:
-      case SoyFileParserConstants.EQ_SINGLE_QUOTE:
         return "attribute value";
 
       case SoyFileParserConstants.CMD_FULL_SP:

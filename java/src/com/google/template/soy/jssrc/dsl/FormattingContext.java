@@ -59,6 +59,12 @@ final class FormattingContext implements AutoCloseable {
     return this;
   }
 
+  /** Writes the jsdoc for the {@code jsDoc} to the buffer. */
+  FormattingContext append(JsDoc jsDoc) {
+    jsDoc.doFormatJsDoc(this);
+    return this;
+  }
+
   /**
    * Writes the initial statements for the {@code chunk} to the buffer. This is the only allowed
    * direct caller of {@link CodeChunk#doFormatInitialStatements}.
@@ -178,8 +184,7 @@ final class FormattingContext implements AutoCloseable {
    * {@link FormattingContext#curScope} points to the current tip of the tree.
    */
   private static final class Scope {
-    final Set<CodeChunk> formatted =
-        Collections.<CodeChunk>newSetFromMap(new IdentityHashMap<CodeChunk, Boolean>());
+    final Set<CodeChunk> formatted = Collections.newSetFromMap(new IdentityHashMap<>());
     @Nullable
     final Scope parent;
     final boolean emitClosingBrace;

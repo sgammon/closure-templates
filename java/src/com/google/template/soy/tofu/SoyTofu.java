@@ -16,7 +16,6 @@
 
 package com.google.template.soy.tofu;
 
-import com.google.common.base.Predicate;
 import com.google.common.base.Supplier;
 import com.google.common.collect.ImmutableSortedSet;
 import com.google.template.soy.data.SanitizedContent;
@@ -26,6 +25,7 @@ import com.google.template.soy.parseinfo.SoyTemplateInfo;
 import com.google.template.soy.shared.SoyCssRenamingMap;
 import com.google.template.soy.shared.SoyIdRenamingMap;
 import java.util.Map;
+import java.util.function.Predicate;
 import javax.annotation.Nullable;
 
 /**
@@ -34,7 +34,12 @@ import javax.annotation.Nullable;
  * <p>Important: If you're a user of Soy, you should use the methods here (on a SoyTofu object
  * created by Soy), but should not create your own implementations of this interface.
  *
+ * @deprecated Use SoySauce instead. Apps/framework users should follow this migration guide
+ *     go/af-soy-migration. All other users should be able to switch from SoyFileSet.compileToTofu()
+ *     to SoyFileSet.compileTemplates(). To use the support for precompilation (outside of
+ *     apps/framework) see PrecompiledSoyModule.
  */
+@Deprecated
 public interface SoyTofu {
 
   /**
@@ -85,11 +90,6 @@ public interface SoyTofu {
 
   /**
    * Gets the set of injected param keys used by a template (and its transitive callees).
-   *
-   * <p>Note: The {@code SoyTemplateInfo} object already has a method {@code getUsedIjParams()}.
-   * That method should produce the same results as this method, unless the bundle of Soy files
-   * included when running the SoyParseInfoGenerator is different from the bundle of Soy files
-   * included when creating this SoyTofu object.
    *
    * @param templateInfo Info for the template to get injected params of.
    * @return The set of injected param keys used by the given template.
@@ -142,6 +142,9 @@ public interface SoyTofu {
     /**
      * Sets the plugin instances that will be used to for method calls from {@code
      * SoyJavaSourceFunctions} that called {@code JavaValueFactory.callInstanceMethod}.
+     *
+     * <p>Most plugin instances should be associated with the Tofu instance during construction, but
+     * this method can be used to add more if that is not feasible or desireable.
      */
     Renderer setPluginInstances(Map<String, Supplier<Object>> pluginInstances);
 
@@ -165,16 +168,15 @@ public interface SoyTofu {
     /**
      * Sets the expected content kind.
      *
-     * <p>An attempt to render a non-strict template or a strict template with a different kind will
-     * fail if this has been called.
+     * <p>An attempt to render a template with a different kind will fail if this has been called.
      */
     Renderer setContentKind(SanitizedContent.ContentKind contentKind);
 
     /**
      * Renders the template using the data, injected data, and message bundle previously set.
      *
-     * <p>Checks the content kind of the template. Non-strict and kind="html" templates are allowed,
-     * unless setContentKind was called. The goal is to prevent accidental rendering of unescaped
+     * <p>Checks the content kind of the template. kind="html" templates are allowed, unless
+     * setContentKind was called. The goal is to prevent accidental rendering of unescaped
      * kind="text" in contexts where that could XSS.
      *
      * @throws SoyTofuException if an error occurs during rendering.
@@ -182,15 +184,15 @@ public interface SoyTofu {
     String render();
 
     /**
-     * Renders the strict-mode template as a SanitizedContent object, which can be used as an input
-     * to another Soy template, or used to verify that the output type is correct.
+     * Renders the template as a SanitizedContent object, which can be used as an input to another
+     * Soy template, or used to verify that the output type is correct.
      *
      * <p>This returns a SanitizedContent object corresponding to the kind="..." attribute of the
      * template. The expected content kind must be set beforehand, unless HTML is expected, to avoid
      * an exception.
      *
-     * @throws IllegalArgumentException If the template is non-strict, or the kind doesn't match the
-     *     expected kind (from setContentKind, or the default of HTML).
+     * @throws IllegalArgumentException If the kind doesn't match the expected kind (from
+     *     setContentKind, or the default of HTML).
      * @throws SoyTofuException if an error occurs during rendering.
      */
     SanitizedContent renderStrict();
@@ -199,8 +201,8 @@ public interface SoyTofu {
      * Renders the template using the data, injected data, and message bundle previously set into
      * the given Appendable.
      *
-     * <p>Checks the content kind of the template. Non-strict and kind="html" templates are allowed,
-     * unless setContentKind was called. The goal is to prevent accidental rendering of unescaped
+     * <p>Checks the content kind of the template. kind="html" templates are allowed, unless
+     * setContentKind was called. The goal is to prevent accidental rendering of unescaped
      * kind="text" in contexts where that could XSS.
      *
      * @throws SoyTofuException if an error occurs during rendering.

@@ -18,15 +18,10 @@ package com.google.template.soy.basicfunctions;
 
 import static com.google.common.truth.Truth.assertThat;
 
-import com.google.common.collect.ImmutableList;
 import com.google.template.soy.data.restricted.IntegerData;
 import com.google.template.soy.data.restricted.NullData;
 import com.google.template.soy.data.restricted.UndefinedData;
-import com.google.template.soy.exprtree.Operator;
-import com.google.template.soy.jssrc.restricted.JsExpr;
 import com.google.template.soy.plugin.java.restricted.testing.SoyJavaSourceFunctionTester;
-import com.google.template.soy.pysrc.restricted.PyExpr;
-import com.google.template.soy.pysrc.restricted.PyExprUtils;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
@@ -48,18 +43,4 @@ public final class IsNullFunctionTest {
     assertThat(tester.callFunction("")).isEqualTo(false);
   }
 
-  @Test
-  public void testComputeForJsSrc() {
-    JsExpr expr = new JsExpr("JS_CODE", Integer.MAX_VALUE);
-    assertThat(IS_NULL.computeForJsSrc(ImmutableList.of(expr)))
-        .isEqualTo(new JsExpr("JS_CODE == null", Operator.EQUAL.getPrecedence()));
-  }
-
-  @Test
-  public void testComputeForPySrc() {
-    PyExpr expr = new PyExpr("PY_CODE", Integer.MAX_VALUE);
-    assertThat(IS_NULL.computeForPySrc(ImmutableList.of(expr)))
-        .isEqualTo(
-            new PyExpr("PY_CODE is None", PyExprUtils.pyPrecedenceForOperator(Operator.EQUAL)));
-  }
 }

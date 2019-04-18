@@ -19,6 +19,7 @@ package com.google.template.soy.shared.internal;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.template.soy.shared.restricted.SoyFunction;
+import com.google.template.soy.shared.restricted.SoyPureFunction;
 import java.util.Set;
 import javax.annotation.Nullable;
 
@@ -44,7 +45,10 @@ public enum BuiltinFunction implements SoyFunction {
   V1_EXPRESSION("v1Expression"),
   REMAINDER("remainder"),
   MSG_WITH_ID("msgWithId"),
+  VE_DATA("ve_data"),
   IS_PRIMARY_MSG_IN_USE("$$isPrimaryMsgInUse"),
+  TO_FLOAT("$$toFloat"),
+  DEBUG_SOY_TEMPLATE_INFO("$$debugSoyTemplateInfo"),
   ;
 
   public static ImmutableSet<String> names() {
@@ -88,11 +92,50 @@ public enum BuiltinFunction implements SoyFunction {
   public Set<Integer> getValidArgsSizes() {
     switch (this) {
       case CSS:
+      case VE_DATA:
         return ImmutableSet.of(1, 2);
       case IS_PRIMARY_MSG_IN_USE:
         return ImmutableSet.of(3);
-      default:
+      case DEBUG_SOY_TEMPLATE_INFO:
+        return ImmutableSet.of(0);
+      case IS_FIRST:
+      case IS_LAST:
+      case INDEX:
+      case CHECK_NOT_NULL:
+      case XID:
+      case V1_EXPRESSION:
+      case REMAINDER:
+      case MSG_WITH_ID:
+      case TO_FLOAT:
         return ImmutableSet.of(1);
     }
+    throw new AssertionError(this);
+  }
+
+  /**
+   * Whether or not this function is pure.
+   *
+   * <p>This is equivalent to annotating a function with {@link SoyPureFunction}. See {@link
+   * SoyPureFunction} for the definition of a pure function.
+   */
+  public boolean isPure() {
+    switch (this) {
+      case CHECK_NOT_NULL:
+      case MSG_WITH_ID:
+      case VE_DATA:
+      case TO_FLOAT:
+        return true;
+      case IS_FIRST: // implicitly depends on loop index
+      case IS_LAST: // implicitly depends on loop index
+      case INDEX: // implicitly depends on loop index
+      case CSS: // implicitly depends on a renaming map or js compiler flag
+      case XID: // implicitly depends on a renaming map or js compiler flag
+      case V1_EXPRESSION: // this is a black box from the compiler perspective
+      case REMAINDER: // implicitly depends on a plural value
+      case IS_PRIMARY_MSG_IN_USE: // implicitly depends on a message bundle
+      case DEBUG_SOY_TEMPLATE_INFO: // implicitly depends on a renderer param or js compiler flag
+        return false;
+    }
+    throw new AssertionError(this);
   }
 }

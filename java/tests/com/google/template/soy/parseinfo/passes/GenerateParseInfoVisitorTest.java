@@ -25,16 +25,15 @@ import com.google.common.base.Joiner;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.protobuf.Descriptors.GenericDescriptor;
+import com.google.template.soy.SoyFileSetParser.ParseResult;
 import com.google.template.soy.SoyFileSetParserBuilder;
 import com.google.template.soy.base.SourceLocation;
 import com.google.template.soy.base.internal.Identifier;
 import com.google.template.soy.base.internal.IndentedLinesBuilder;
-import com.google.template.soy.base.internal.SoyFileKind;
 import com.google.template.soy.error.ErrorReporter;
 import com.google.template.soy.shared.SharedTestUtils;
 import com.google.template.soy.soytree.NamespaceDeclaration;
 import com.google.template.soy.soytree.SoyFileNode;
-import com.google.template.soy.soytree.SoyFileSetNode;
 import com.google.template.soy.soytree.TemplateNode;
 import com.google.template.soy.soytree.TemplateRegistry;
 import com.google.template.soy.testing.Extendable;
@@ -181,11 +180,19 @@ public final class GenerateParseInfoVisitorTest {
         .contains("com.google.template.soy.testing.Foo.InnerEnum.getDescriptor()");
   }
 
+  @Test
+  public void testFindsVe() {
+    String parseInfoContent =
+        createParseInfo(
+            ImmutableList.of(Foo.getDescriptor()), "{@param ve: ve<soy.test.Foo>}", "{$ve}");
+
+    assertThat(parseInfoContent).contains("com.google.template.soy.testing.Foo.getDescriptor()");
+  }
+
   private static SoyFileNode forFilePathAndNamespace(String filePath, String namespace) {
     return new SoyFileNode(
         0,
         filePath,
-        SoyFileKind.SRC,
         new NamespaceDeclaration(
             Identifier.create(namespace, SourceLocation.UNKNOWN),
             ImmutableList.of(),
@@ -196,19 +203,19 @@ public final class GenerateParseInfoVisitorTest {
   private static String createParseInfo(
       ImmutableList<GenericDescriptor> protos, String... templateLines) {
     SoyTypeRegistry typeRegistry = new SoyTypeRegistry.Builder().addDescriptors(protos).build();
-    SoyFileSetNode tree =
+    ParseResult parseResult =
         SoyFileSetParserBuilder.forFileContents(
                 SharedTestUtils.buildTestSoyFileContent(
                     /* strictHtml= */ true,
                     /* soyDocParamNames= */ null,
                     Joiner.on('\n').join(templateLines)))
             .typeRegistry(typeRegistry)
-            .parse()
-            .fileSet();
-    TemplateRegistry registry = new TemplateRegistry(tree, ErrorReporter.exploding());
+            .parse();
+    TemplateRegistry registry = parseResult.registry();
 
     ImmutableMap<String, String> parseInfos =
-        new GenerateParseInfoVisitor("com.google.gpivtest", "filename", registry).exec(tree);
+        new GenerateParseInfoVisitor("com.google.gpivtest", "filename", registry, typeRegistry)
+            .exec(parseResult.fileSet());
 
     assertThat(parseInfos).containsKey("NoPathSoyInfo.java");
     return parseInfos.get("NoPathSoyInfo.java");

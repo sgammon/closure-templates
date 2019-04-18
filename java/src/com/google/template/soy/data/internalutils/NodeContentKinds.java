@@ -52,9 +52,7 @@ public final class NodeContentKinds {
           .put(
               SanitizedContentKind.TRUSTED_RESOURCE_URI,
               "goog.soy.data.SanitizedTrustedResourceUri")
-          // NOTE: Text intentionally doesn't follow the convention. Note that we don't just
-          // convert them to a string, because the UnsanitizedText wrapper helps prevent the
-          // content from getting used elsewhere in a noAutoescape.
+          // NOTE: Text could be a string but for legacy reasons, it's UnsanitizedText.
           .put(SanitizedContentKind.TEXT, "goog.soy.data.UnsanitizedText")
           .build();
 
@@ -68,9 +66,6 @@ public final class NodeContentKinds {
           .put(
               SanitizedContentKind.TRUSTED_RESOURCE_URI,
               "goog.soy.data.SanitizedTrustedResourceUri")
-          // NOTE: Text intentionally doesn't follow the convention. Note that we don't just
-          // convert them to a string, because the UnsanitizedText wrapper helps prevent the
-          // content from getting used elsewhere in a noAutoescape.
           .put(SanitizedContentKind.TEXT, "goog.soy.data.UnsanitizedText")
           .build();
 
@@ -130,29 +125,6 @@ public final class NodeContentKinds {
           .put(
               TrustedResourceUrlProto.getDescriptor().getFullName(),
               "soydata.unpackProtoToSanitizedTrustedResourceUri")
-          .build();
-
-  /** The JavaScript method to pack a sanitized object into a safe proto. */
-  private static final ImmutableMap<String, String> JS_TO_PROTO_PACK_FN =
-      ImmutableMap.<String, String>builder()
-          .put(
-              SafeHtmlProto.getDescriptor().getFullName(),
-              "soydata.packSanitizedHtmlToProtoSoyRuntimeOnly")
-          .put(
-              SafeScriptProto.getDescriptor().getFullName(),
-              "soydata.packSanitizedJsToProtoSoyRuntimeOnly")
-          .put(
-              SafeUrlProto.getDescriptor().getFullName(),
-              "soydata.packSanitizedUriToProtoSoyRuntimeOnly")
-          .put(
-              SafeStyleProto.getDescriptor().getFullName(),
-              "soydata.packSanitizedCssToSafeStyleProtoSoyRuntimeOnly")
-          .put(
-              SafeStyleSheetProto.getDescriptor().getFullName(),
-              "soydata.packSanitizedCssToSafeStyleSheetProtoSoyRuntimeOnly")
-          .put(
-              TrustedResourceUrlProto.getDescriptor().getFullName(),
-              "soydata.packSanitizedTrustedResourceUriToProtoSoyRuntimeOnly")
           .build();
 
   /** The Python sanitized classes. */
@@ -245,11 +217,6 @@ public final class NodeContentKinds {
       return "soydata";
     }
     return "soydata.VERY_UNSAFE";
-  }
-
-  /** Returns the pack function for converting SanitizedContent objects to safe protos. */
-  public static String toJsPackFunction(Descriptor protoDescriptor) {
-    return Preconditions.checkNotNull(JS_TO_PROTO_PACK_FN.get(protoDescriptor.getFullName()));
   }
 
   /** Returns the unpack function for converting safe protos to JS SanitizedContent. */

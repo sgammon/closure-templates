@@ -24,7 +24,6 @@ import com.google.common.io.CharSource;
 import com.google.protobuf.TextFormat;
 import com.google.protobuf.TextFormat.ParseException;
 import com.google.template.soy.SoyFileSetParserBuilder;
-import com.google.template.soy.base.internal.SoyFileKind;
 import com.google.template.soy.base.internal.SoyFileSupplier;
 import com.google.template.soy.base.internal.StableSoyFileSupplier;
 import com.google.template.soy.error.ErrorReporter;
@@ -79,14 +78,11 @@ public class SoyConformanceTest {
     assertViolation(
         "requirement: {\n"
             + "  banned_directive: {\n"
-            + "    directive: '|noAutoescape'\n"
+            + "    directive: '|escapeUri'\n"
             + "  }\n"
             + "  error_message: 'foo'"
             + "}",
-        "{namespace ns}\n"
-            + "{template .foo autoescape=\"deprecated-contextual\"}\n"
-            + "{print 'blah' |noAutoescape}\n"
-            + "{/template}");
+        "{namespace ns}\n" + "{template .foo}\n" + "{print 'blah' |escapeUri}\n" + "{/template}");
   }
 
   @Test
@@ -94,12 +90,12 @@ public class SoyConformanceTest {
     assertNoViolation(
         "requirement: {\n"
             + "  banned_directive: {\n"
-            + "    directive: '|noAutoescape'\n"
+            + "    directive: '|filterUri'\n"
             + "  }\n"
             + "  error_message: 'foo'"
             + "}",
         "{namespace ns}\n"
-            + "{template .noAutoescape}\n"
+            + "{template .filterUri}\n"
             + "This should be allowed.\n"
             + "{/template}");
   }
@@ -135,38 +131,6 @@ public class SoyConformanceTest {
   }
 
   @Test
-  public void testSoyDocParamsCauseErrorWhenSoyDocParamsAreBanned() {
-    assertViolation(
-        "requirement: {\n"
-            + "  custom: {\n"
-            + "    java_class: 'com.google.template.soy.conformance.NoSoyDocParams'\n"
-            + "  }\n"
-            + "  error_message: 'foo'"
-            + "}",
-        "{namespace ns}\n"
-            + "/** @param foo */\n"
-            + "{template .bar}\n"
-            + "  {$foo}\n"
-            + "{/template}\n");
-  }
-
-  @Test
-  public void testHeaderParamsDoNotCauseErrorWhenSoyDocParamsAreBanned() {
-    assertNoViolation(
-        "requirement: {\n"
-            + "  custom: {\n"
-            + "    java_class: 'com.google.template.soy.conformance.NoSoyDocParams'\n"
-            + "  }\n"
-            + "  error_message: 'foo'"
-            + "}",
-        "{namespace ns}\n"
-            + "{template .bar}\n"
-            + "  {@param foo: string}\n"
-            + "  {$foo}\n"
-            + "{/template}\n");
-  }
-
-  @Test
   public void testWhitelistedFileDoesNotCauseErrors() {
     assertNoViolation(
         "requirement: {\n"
@@ -182,7 +146,6 @@ public class SoyConformanceTest {
                     + "{template .foo}\n"
                     + "{checkNotNull(['xxx', 'bar', 'yyy', 'baz'])}\n"
                     + "{/template}"),
-            SoyFileKind.SRC,
             "foo/bar/baz.soy"));
   }
 
@@ -202,7 +165,6 @@ public class SoyConformanceTest {
                     + "{template .foo}\n"
                     + "{checkNotNull(['xxx', 'bar', 'yyy', 'baz'])}\n"
                     + "{/template}"),
-            SoyFileKind.SRC,
             "a/b/c/foo/bar/baz.soy"));
   }
 
@@ -222,10 +184,8 @@ public class SoyConformanceTest {
                     + "{template .foo}\n"
                     + "{checkNotNull(['xxx', 'bar', 'yyy', 'baz'])}\n"
                     + "{/template}"),
-            SoyFileKind.SRC,
             "a/b/c/foo/bar/baz.soy"));
   }
-
 
   @Test
   public void testBannedRawText() {
@@ -249,6 +209,31 @@ public class SoyConformanceTest {
             + "  error_message: 'foo'"
             + "}",
         "{namespace ns}\n" + "{template .foo}\n" + "bar\n" + "{/template}");
+  }
+
+  @Test
+  public void testBannedRawTextDoesNotIncludeComments() {
+    assertNoViolation(
+        "requirement: {\n"
+            + "  banned_raw_text: {\n"
+            + "    text: 'foo'\n"
+            + "  }\n"
+            + "  error_message: 'foo'"
+            + "}",
+        "{namespace ns}\n" + "{template .foo}\n" + "<!-- foo -->\n" + "{/template}");
+  }
+
+  @Test
+  public void testBannedRawTextIgnoresHtmlAttributes() {
+    assertNoViolation(
+        "requirement: {\n"
+            + "  banned_raw_text: {\n"
+            + "    text: 'foo'\n"
+            + "    except_in_html_attribute: 'link'\n"
+            + "  }\n"
+            + "  error_message: 'foo'"
+            + "}",
+        "{namespace ns}\n" + "{template .foo}\n" + "<a link=\"foo\"></a>\n" + "{/template}");
   }
 
   @Test
@@ -421,7 +406,6 @@ public class SoyConformanceTest {
                     + "{template .foo}\n"
                     + "<script onload='foo();'></script>\n"
                     + "{/template}"),
-            SoyFileKind.SRC,
             "foo/bar/baz.soy"));
   }
 
@@ -443,11 +427,9 @@ public class SoyConformanceTest {
                     + "{template .foo}\n"
                     + "<script onload='foo();'></script>\n"
                     + "{/template}"),
-            SoyFileKind.SRC,
             "foo/bar/baz.soy"),
         new StableSoyFileSupplier(
             CharSource.wrap("{namespace ns}\n" + "{template .noViolation}{/template}"),
-            SoyFileKind.SRC,
             "foo/bar/quux.soy"));
   }
 
@@ -490,49 +472,6 @@ public class SoyConformanceTest {
             + "  error_message: 'foo'"
             + "}",
         "{namespace ns}{template .bar}{@param foo : ?}{css($foo, 'foo')}{/template}");
-  }
-
-  @Test
-  public void testRequireStrictAutoescaping() {
-    assertNoViolation(
-        "requirement: {\n"
-            + "  require_strict_autoescaping: {}\n"
-            + "  error_message: 'foo'"
-            + " "
-            + "}",
-        "{namespace ns}\n" + "{template .foo}{/template}\n");
-    assertViolation(
-        "requirement: {\n"
-            + "  require_strict_autoescaping: {}\n"
-            + "  error_message: 'foo'"
-            + " "
-            + "}",
-        "{namespace ns }\n" + "{template .foo autoescape=\"deprecated-contextual\"}{/template}\n");
-  }
-
-  @Test
-  public void testRequireStrictlyTypedIjs() {
-    assertNoViolation(
-        "requirement: {\n"
-            + "  require_strongly_typed_ij_params: {}\n"
-            + "  error_message: 'foo'"
-            + " "
-            + "}",
-        "{namespace ns}\n" + "{template .foo}{/template}\n");
-    assertViolation(
-        "requirement: {\n"
-            + "  require_strongly_typed_ij_params: {}\n"
-            + "  error_message: 'foo'"
-            + " "
-            + "}",
-        "{namespace ns}{template .foo}{$ij.foo}{/template}\n");
-    assertNoViolation(
-        "requirement: {\n"
-            + "  require_strongly_typed_ij_params: {}\n"
-            + "  error_message: 'foo'"
-            + " "
-            + "}",
-        "{namespace ns}{template .foo}{@inject foo : ?}{$foo}{/template}\n");
   }
 
   @Test

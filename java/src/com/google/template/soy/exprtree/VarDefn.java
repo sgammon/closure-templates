@@ -16,7 +16,9 @@
 
 package com.google.template.soy.exprtree;
 
+import com.google.template.soy.base.SourceLocation;
 import com.google.template.soy.types.SoyType;
+import javax.annotation.Nullable;
 
 /**
  * Interface for the definition of a variable, i.e. a value that can be referred to by name.
@@ -30,8 +32,6 @@ public interface VarDefn {
   enum Kind {
     // Explicitly declared parameter.
     PARAM,
-    // Injected parameter.
-    IJ_PARAM,
     // Local variable
     LOCAL_VAR,
     // State variable
@@ -43,19 +43,24 @@ public interface VarDefn {
   /** What kind of variable this is (param, local var, etc). */
   Kind kind();
 
-  /** The name of this variable. */
+  /**
+   * The name of this variable.
+   *
+   * <p><em>Not including the {@code $}.</em>
+   */
   String name();
+
+  /** The source location of the variable name. */
+  @Nullable
+  SourceLocation nameLocation();
 
   /** Returns the data type of this variable. */
   SoyType type();
 
-  /** Returns true if this is an {@code $ij} variable or an {@code @inject} param. */
+  /** Returns true if this is an {@code @inject} param. */
   boolean isInjected();
 
-  /**
-   * Returns the index of this variable in the local variable table of the template or {@code -1}
-   * for {@link Kind#IJ_PARAM ij params}.
-   */
+  /** Returns the index of this variable in the local variable table of the template. */
   int localVariableIndex();
 
   /** Assigns the index of this variable in the local variable table for its containing template. */

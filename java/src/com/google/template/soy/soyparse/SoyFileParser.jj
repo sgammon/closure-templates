@@ -44,6 +44,7 @@ PARSER_BEGIN(SoyFileParser)
 package com.google.template.soy.soyparse;
 
 import static com.google.common.base.Preconditions.checkNotNull;
+import static com.google.common.base.Preconditions.checkState;
 import static com.google.template.soy.exprtree.Operator.createOperatorNode;
 
 import com.google.common.collect.ImmutableList;
@@ -53,12 +54,11 @@ import com.google.common.primitives.Ints;
 import com.google.common.primitives.Longs;
 import com.google.template.soy.base.SourceLocation;
 import com.google.template.soy.base.internal.BaseUtils;
-import com.google.template.soy.base.internal.Identifier;
 import com.google.template.soy.base.internal.IdGenerator;
+import com.google.template.soy.base.internal.Identifier;
 import com.google.template.soy.base.internal.QuoteStyle;
-import com.google.template.soy.base.internal.SoyFileKind;
-import com.google.template.soy.error.ErrorReporter.Checkpoint;
 import com.google.template.soy.error.ErrorReporter;
+import com.google.template.soy.error.ErrorReporter.Checkpoint;
 import com.google.template.soy.error.SoyErrorKind;
 import com.google.template.soy.error.SoyErrorKind.StyleAllowance;
 import com.google.template.soy.exprtree.AbstractParentExprNode;
@@ -72,15 +72,14 @@ import com.google.template.soy.exprtree.GlobalNode;
 import com.google.template.soy.exprtree.IntegerNode;
 import com.google.template.soy.exprtree.ItemAccessNode;
 import com.google.template.soy.exprtree.ListLiteralNode;
-import com.google.template.soy.exprtree.RecordLiteralNode;
 import com.google.template.soy.exprtree.MapLiteralNode;
 import com.google.template.soy.exprtree.NullNode;
 import com.google.template.soy.exprtree.Operator;
 import com.google.template.soy.exprtree.ProtoInitNode;
+import com.google.template.soy.exprtree.RecordLiteralNode;
 import com.google.template.soy.exprtree.StringNode;
 import com.google.template.soy.exprtree.VarRefNode;
-import com.google.template.soy.soytree.defn.HeaderParam;
-import com.google.template.soy.soytree.defn.TemplateStateVar;
+import com.google.template.soy.exprtree.VeLiteralNode;
 import com.google.template.soy.soytree.AliasDeclaration;
 import com.google.template.soy.soytree.CallBasicNode;
 import com.google.template.soy.soytree.CallDelegateNode;
@@ -96,6 +95,7 @@ import com.google.template.soy.soytree.ForNonemptyNode;
 import com.google.template.soy.soytree.IfCondNode;
 import com.google.template.soy.soytree.IfElseNode;
 import com.google.template.soy.soytree.IfNode;
+import com.google.template.soy.soytree.KeyNode;
 import com.google.template.soy.soytree.LetContentNode;
 import com.google.template.soy.soytree.LetNode;
 import com.google.template.soy.soytree.LetValueNode;
@@ -120,20 +120,21 @@ import com.google.template.soy.soytree.SwitchDefaultNode;
 import com.google.template.soy.soytree.SwitchNode;
 import com.google.template.soy.soytree.TemplateBasicNodeBuilder;
 import com.google.template.soy.soytree.TemplateDelegateNodeBuilder;
-import com.google.template.soy.soytree.TemplateNode.SoyFileHeaderInfo;
+import com.google.template.soy.soytree.TemplateElementNodeBuilder;
 import com.google.template.soy.soytree.TemplateNode;
+import com.google.template.soy.soytree.TemplateNode.SoyFileHeaderInfo;
 import com.google.template.soy.soytree.TemplateNodeBuilder;
 import com.google.template.soy.soytree.VeLogNode;
-import com.google.template.soy.types.SoyType;
-import com.google.template.soy.types.SoyTypes;
+import com.google.template.soy.soytree.WhitespaceMode;
+import com.google.template.soy.soytree.defn.TemplateHeaderVarDefn;
+import com.google.template.soy.soytree.defn.TemplateParam;
+import com.google.template.soy.soytree.defn.TemplateStateVar;
+import com.google.template.soy.types.NullType;
 import com.google.template.soy.types.ast.GenericTypeNode;
 import com.google.template.soy.types.ast.NamedTypeNode;
 import com.google.template.soy.types.ast.RecordTypeNode;
 import com.google.template.soy.types.ast.TypeNode;
 import com.google.template.soy.types.ast.UnionTypeNode;
-import com.google.template.soy.types.SoyTypeRegistry;
-import com.google.template.soy.types.ErrorType;
-import com.google.template.soy.types.NullType;
 import java.io.Reader;
 import java.io.StringReader;
 import java.util.ArrayList;
@@ -177,15 +178,8 @@ import javax.annotation.Nullable;
  * 4. SoyDoc:
  *    + Starts with slash-star-star (/**) and ends with star-slash (*&#47;) like JavaDoc.
  *    + SoyDoc must appear on its own line(s) and start at the start of a line.
- *    + Currently recognizes two tags: "&#64;param keyName" and "&#64;param? optionalKeyName".
- *    Example:
- *    /**
- *     * &#64;param boo Something scary.
- *     * &#64;param? goo Something slimy (optional).
- *     *&#47;
  *
  * 5. Template:
- *    + Each template must be immediately preceded by a SoyDoc block.
  *    + The {template} tag and the {/template} tag must each appear on its own line(s) and start
  *      at the start of a line.
  *    Examples:
@@ -306,6 +300,7 @@ import javax.annotation.Nullable;
  *    {log}...{/log}
  *    {debugger}
  *    {velog ...}....{/velog}
+ *    {key ...}
  *
  * 5. Misc:
  *    + The following commands are not allowed to appear in a template:
@@ -397,7 +392,7 @@ import javax.annotation.Nullable;
  *
  *    11. Function:
  *       + Function name, open parenthesis, optional expression list, close parenthesis.
- *       + The function name is one or more identifiers, seperated by dots.
+ *       + The function name is one or more identifiers, separated by dots.
  *       + See above for the definition of an expression list.
  *       Examples:   foo()   isFirst($item)   my.new.Proto(a: 'str', b: $foo)
  *
@@ -418,13 +413,9 @@ public class SoyFileParser {
       SoyErrorKind.of("Invalid callee name ''{0}''.");
   private static final SoyErrorKind INVALID_DELTEMPLATE_NAME =
       SoyErrorKind.of("Deltemplate ''{0}'' must have a fully qualified name.");
-  private static final SoyErrorKind INVALID_PRINT_COMMAND_TEXT =
-      SoyErrorKind.of("Invalid ''print'' command text \"{0}\" (check the directives).");
   private static final SoyErrorKind INVALID_TEMPLATE_NAME =
       SoyErrorKind.of("Template name ''{0}'' must be relative to the file namespace, i.e. a dot "
           + "followed by an identifier.");
-  private static final SoyErrorKind MULTIPLE_PHNAME_ATTRIBUTES_IN_COMMAND =
-      SoyErrorKind.of("Found multiple ''phname'' attributes in command text \"{0}\".");
   private static final SoyErrorKind PLURAL_AND_SELECT_NOT_ALLOWED_INSIDE_PLURAL_BLOCK =
       SoyErrorKind.of("Tags ''plural'' and ''select'' are not allowed inside ''plural'' blocks.");
   private static final SoyErrorKind PLURAL_CASE_OUT_OF_BOUNDS =
@@ -433,10 +424,6 @@ public class SoyFileParser {
       SoyErrorKind.of("Invalid number in ''plural case'' command text.");
   private static final SoyErrorKind PLURAL_OFFSET_OUT_OF_BOUNDS =
       SoyErrorKind.of("The ''offset'' for plural must be a positive integer.");
-  private static final SoyErrorKind PRINT_COMMAND_WITH_EMPTY_TEXT =
-      SoyErrorKind.of("Found ''print'' command with empty command text.");
-  private static final SoyErrorKind STATE_VARS_NOT_ALLOWED =
-      SoyErrorKind.of("@state declarations are not available for general use.");
   private static final SoyErrorKind UNEXPECTED_CONTENT_AFTER =
       SoyErrorKind.of("Unexpected content after ''{0}'', expected only comments or whitespace.");
   private static final SoyErrorKind UNEXPECTED_CONTENT_BEFORE =
@@ -444,6 +431,18 @@ public class SoyFileParser {
   private static final SoyErrorKind CSS_XID_MIGRATION =
       SoyErrorKind.of("The ''{0}'' command is {1}, please switch to using the {0} function."
   );
+  // There's nothing technical preventing us from allowing default values on injected parameters,
+  // but we're not sure if that's something we want in the language, so we're preventing it for now.
+  private static final SoyErrorKind INJECT_DEFAULT_PARAM =
+      SoyErrorKind.of("Default parameters are not supported on injected parameters.");
+  private static final SoyErrorKind OPTIONAL_DEFAULT_PARAM =
+      SoyErrorKind.of(
+          "Default parameters are not supported on optional parameters. Did you mean "
+          + "'''{@param ...}'''?");
+  private static final SoyErrorKind STATE_IN_TEMPLATE =
+      SoyErrorKind.of("@state declarations are only allowed in elements.");
+  private static final SoyErrorKind STATE_REQUIRES_VALUE =
+      SoyErrorKind.of("@state declarations require an initial value.");
 
   // Expression errors:
   private static final SoyErrorKind DUPLICATE_KEY_NAME =
@@ -455,12 +454,8 @@ public class SoyFileParser {
           "Soy integers are constrained to the range of JavaScript integers: "
               + "https://www.ecma-international.org/ecma-262/5.1/#sec-8.5",
           StyleAllowance.NO_PUNCTUATION);
-  private static final SoyErrorKind INVALID_FUNCTION_NAME =
-      SoyErrorKind.of("Invalid function name ''{0}''.");
   private static final SoyErrorKind INVALID_PARAM_NAME =
       SoyErrorKind.of("Invalid param name ''{0}''.");
-  private static final SoyErrorKind INVALID_VAR_NAME_IJ =
-      SoyErrorKind.of("Invalid var name ''ij'' (''ij'' is for injected data ref).");
   private static final SoyErrorKind UNEXPECTED_PIPE =
       SoyErrorKind.of("Unexpected ''|''. Print directives should not have whitespace after ''|''.");
   private static final SoyErrorKind OLD_RECORD_LITERAL_SYNTAX =
@@ -480,23 +475,21 @@ public class SoyFileParser {
           StyleAllowance.NO_CAPS,
           StyleAllowance.NO_PUNCTUATION);
 
+  /** Names of attributes whose values should be parsed as expressions. */
+  private static final ImmutableSet<String> EXPR_ATTR_NAMES =
+      ImmutableSet.of("data", "genders", "key", "logonly", "variant");
 
   /** Attempts to parse the given input as a Soy expression. */
   public static ExprNode parseExprOrDie(String exprText) {
-    return parseExpression(
-        exprText,
-        PluginResolver.nullResolver(
-            PluginResolver.Mode.REQUIRE_DEFINITIONS,
-            ErrorReporter.exploding()),
-        ErrorReporter.exploding());
+    return parseExpression(exprText, ErrorReporter.exploding());
   }
 
   /** Attempts to parse the given input as a Soy expression. Returns null if parsing fails. */
   @Nullable
   public static ExprNode parseExpression(
-      String exprText, PluginResolver resolver, ErrorReporter errorReporter) {
+      String exprText, ErrorReporter errorReporter) {
     String filePath = "expression parser";
-    SoyFileParser parser = new SoyFileParser(exprText, resolver, filePath, errorReporter);
+    SoyFileParser parser = new SoyFileParser(exprText, filePath, errorReporter);
     try {
       return parser.ExprInput();
     } catch (ParseException e) {
@@ -508,20 +501,13 @@ public class SoyFileParser {
 
   /** Attempts to parse the given input as a type node. Returns null if parsing fails. */
   @Nullable
-  public static SoyType parseType(
+  public static TypeNode parseType(
       String typeText,
-      SoyTypeRegistry typeRegistry,
       String filePath,
       ErrorReporter errorReporter) {
-    SoyFileParser parser = new SoyFileParser(
-        typeText,
-        PluginResolver.nullResolver(
-            PluginResolver.Mode.REQUIRE_DEFINITIONS,
-            errorReporter),
-        filePath,
-        errorReporter);
+    SoyFileParser parser = new SoyFileParser(typeText, filePath, errorReporter);
     try {
-      return new TypeNodeConverter(errorReporter, typeRegistry).getOrCreateType(parser.TypeExpr());
+      return parser.TypeExprInput();
     } catch (ParseException e) {
       ParseErrors.reportSoyFileParseException(
           errorReporter, filePath, e, parser.token_source.curLexState);
@@ -529,72 +515,49 @@ public class SoyFileParser {
     }
   }
 
-  /** Type registry for resolving type names. */
-  private SoyTypeRegistry typeRegistry;
-
   /** Node id generator for the tree being built. */
   private IdGenerator nodeIdGen;
-
-  /** The kind of this Soy file. */
-  private SoyFileKind soyFileKind;
 
   /** Path of source being parsed. This is descriptive, not a means to refetch source. */
   private String filePath;
 
+  /** Controls how to handle whitespaces (e.g. whether to join lines or preserve whitespace). */
+  private WhitespaceMode whitespaceMode = WhitespaceMode.JOIN;
+
   /** For reporting errors during parsing. */
   private ErrorReporter errorReporter;
-
-  private PluginResolver pluginResolver;
 
   /** The header info for the file we are parsing. */
   private SoyFileHeaderInfo headerInfo;
 
-  /** Experimental features for this compilation, if any. */
-  private ImmutableSet<String> experimentalFeatures;
-
-  private TypeNodeConverter typeNodeConverter;
-
   /**
    * Constructor that takes a reader object providing the input.
    *
-   * @param typeRegistry The type registry for resolving type names.
    * @param nodeIdGen The node id generator for the tree being built.
    * @param input The input to parse.
-   * @param soyFileKind The kind of this Soy file.
    * @param filePath The path of the source being parsed. Used for reporting.
    * @param errorReporter For reporting parse errors.
    */
   public SoyFileParser(
-      SoyTypeRegistry typeRegistry,
-      PluginResolver pluginResolver,
       IdGenerator nodeIdGen,
       Reader input,
-      SoyFileKind soyFileKind,
       String filePath,
-      ErrorReporter errorReporter,
-      ImmutableSet<String> experimentalFeatures) {
+      ErrorReporter errorReporter) {
     this(input);
-    this.typeRegistry = checkNotNull(typeRegistry);
-    this.pluginResolver = checkNotNull(pluginResolver);
     this.nodeIdGen = checkNotNull(nodeIdGen);
-    this.soyFileKind = checkNotNull(soyFileKind);
     this.filePath = checkNotNull(filePath);
     this.errorReporter = checkNotNull(errorReporter);
-    this.experimentalFeatures = checkNotNull(experimentalFeatures);
-    this.typeNodeConverter = new TypeNodeConverter(errorReporter, typeRegistry);
   }
 
   /** Constructor for use by parseExpression() and parseType() only. */
   private SoyFileParser(
       String input,
-      PluginResolver pluginResolver,
       String filePath,
       ErrorReporter errorReporter) {
     // this starts the lexer in a particular state instead of DEFAULT
     this(new SoyFileParserTokenManager(
         new SimpleCharStream(new StringReader(input), 1, 1), EXPR));
     this.filePath = filePath;
-    this.pluginResolver = checkNotNull(pluginResolver);
     this.errorReporter = checkNotNull(errorReporter);
     // Some part of the parser assume that header info is not null.
     this.headerInfo = SoyFileHeaderInfo.EMPTY;
@@ -603,7 +566,6 @@ public class SoyFileParser {
   /** Attempts to parse the given input as a Soy file. Returns null if parsing fails. */
   @Nullable
   public SoyFileNode parseSoyFile() {
-    checkNotNull(typeRegistry);
     checkNotNull(nodeIdGen);
     Checkpoint checkpoint = errorReporter.checkpoint();
     SoyFileNode soyFileNode = null;
@@ -619,11 +581,10 @@ public class SoyFileParser {
     if (errorReporter.errorsSince(checkpoint)) {
       return null;
     }
+    // Parse the html tags
+    // See comments on HtmlRewriter for why this isn't deeply integrated into this parser.
+    HtmlRewriter.rewrite(soyFileNode, nodeIdGen, errorReporter);
     return soyFileNode;
-  }
-
-  String getFilePath() {
-    return filePath;
   }
 
   /**
@@ -631,7 +592,7 @@ public class SoyFileParser {
    *
    * See https://javacc.org/tutorials/errorrecovery
    */
-  private Token reportFileErrorAndSkipTo(ParseException error, int skipTo) {
+  private void reportFileErrorAndSkipTo(ParseException error, int skipTo) {
     ParseErrors.reportSoyFileParseException(
         errorReporter, filePath, error, token_source.curLexState);
     Token t;
@@ -640,7 +601,6 @@ public class SoyFileParser {
     // We need to halt when observing EOF.  The behavior of the token manager is to keep returning
     // EOF from getNextToken(), so if we don't check for it this will become an infinite loop.
     } while (t.kind != skipTo && t.kind != EOF);
-    return t;
   }
 
   /**
@@ -681,14 +641,9 @@ public class SoyFileParser {
     return VarRefNode.error(createSrcLoc(tok1, rest));
   }
 
-  /** Create an error ExprNode at the given source location. */
-  private VarRefNode errorExpr(SourceLocation location) {
-    return VarRefNode.error(location);
-  }
-
   // An error that can be thrown to abort parsing.  This is useful if an error has been reported
   // and it is known that parsing cannot continue.
-  static final class AbortParsingError extends Error {}
+  private static final class AbortParsingError extends Error {}
 }
 
 PARSER_END(SoyFileParser)
@@ -769,10 +724,12 @@ TOKEN_MGR_DECLS: {
 
 // Due to ambiguity with uri schemes, line comments in TEMPLATE_DEFAULT are only interpreted as such
 // if there is preceding whitespace.
-// Other lexical states don't have this requirement.  The fact that comments swallow a leading
-// whitespace character doesn't affect output because of how line joining works.
+// Other lexical states don't have this requirement.  The fact that comments swallow leading
+// whitespace characters doesn't affect output because of how line joining works.
 <TEMPLATE_DEFAULT> SKIP: {
-  < <WS> <LINE_COMMENT> >
+  // In theory we only require a single whitespace character, but this rule will consume all
+  // preceeding whitespace. This is necessary to make this unambiguous with the TOKEN_WS definition.
+  < (<WS>)+ <LINE_COMMENT> >
 }
 
 // NOTE: we don't just configure this for state * because these comments shouldn't work in things
@@ -835,37 +792,16 @@ TOKEN_MGR_DECLS: {
 // Tag attributes.
 
 <IN_CMD_TAG> TOKEN: {
-  < CMD_DOUBLE_QUOTE: "\"" > { pushState(IN_DQ_ATTRIBUTE_VALUE); }
-| < CMD_SINGLE_QUOTE: "'" > { pushState(IN_SQ_ATTRIBUTE_VALUE); }
-
-
-// While most Soy tag attributes are parsed as one big text blob in the IN_(SQ_DQ) ATTRIBUTE_VALUE
-// state, the attributes below need to be parsed as Soy expressions. Since javacc parsers do not
-// backtrack, we want to switch the parser in the EXPR_NO_DOUBLE_QUOTE state, and parse the
-// expression directly from the input stream. (Otherwise we would need to create a whole new
-// SoyFileParser with just the attribute text as input.)
-| < DATA_ATTR_DQ: "data" ( <WS> )* "=" ( <WS> )* "\"" > : EXPR_NO_DOUBLE_QUOTE
-| < DATA_ATTR_SQ: "data" ( <WS> )* "=" ( <WS> )* "'" > : EXPR_NO_SINGLE_QUOTE
-| < VARIANT_ATTR_DQ: "variant" ( <WS> )* "=" ( <WS> )* "\"" > : EXPR_NO_DOUBLE_QUOTE
-| < VARIANT_ATTR_SQ: "variant" ( <WS> )* "=" ( <WS> )* "'" > : EXPR_NO_SINGLE_QUOTE
-| < GENDERS_ATTR_DQ: "genders" ( <WS> )* "=" ( <WS> )* "\"" > : EXPR_NO_DOUBLE_QUOTE
-| < GENDERS_ATTR_SQ: "genders" ( <WS> )* "=" ( <WS> )* "'" > : EXPR_NO_SINGLE_QUOTE
-| < LOGONLY_ATTR_DQ: "logonly" ( <WS> )* "=" ( <WS> )* "\"" > : EXPR_NO_DOUBLE_QUOTE
-| < LOGONLY_ATTR_SQ: "logonly" ( <WS> )* "=" ( <WS> )* "'" > : EXPR_NO_SINGLE_QUOTE
-}
-
-// used for things like phname/phex which only happen in the EXPR state
-<EXPR> TOKEN: {
-  < EQ_DOUBLE_QUOTE: "=" ( <WS> )* "\"" > { pushState(IN_DQ_ATTRIBUTE_VALUE); }
-| < EQ_SINGLE_QUOTE: "=" ( <WS> )* "'" > { pushState(IN_SQ_ATTRIBUTE_VALUE); }
+  < CMD_DOUBLE_QUOTE: "\"" >
+| < CMD_SINGLE_QUOTE: "'" >
 }
 
 // exits the attribute value
 <EXPR_NO_DOUBLE_QUOTE> TOKEN: {
-  < END_DQ_EXPR_ATTR: "\"" >: IN_CMD_TAG
+  < END_DQ_EXPR_ATTR: "\"" >
 }
 <EXPR_NO_SINGLE_QUOTE> TOKEN: {
-  < END_SQ_EXPR_ATTR: "'" >: IN_CMD_TAG
+  < END_SQ_EXPR_ATTR: "'" >
 }
 
 
@@ -922,6 +858,7 @@ TOKEN_MGR_DECLS: {
 <DEFAULT> TOKEN: {
   < DELTEMPLATE_OPEN : "{deltemplate" <WS> > { isInTemplate = true; } : IN_CMD_TAG
 | < TEMPLATE_OPEN: "{template" <WS> > { isInTemplate = true; } : IN_CMD_TAG
+| < ELEMENT_OPEN: "{element" <WS> > { isInTemplate = true; } : IN_CMD_TAG
 }
 
 
@@ -945,13 +882,14 @@ TOKEN_MGR_DECLS: {
 <TEMPLATE_DEFAULT> TOKEN: {
   < CMD_CLOSE_TEMPLATE           : "{/template}"    > { resetState(); } : DEFAULT
 | < CMD_CLOSE_DELTEMPLATE        : "{/deltemplate}" > { resetState(); } : DEFAULT
+| < CMD_CLOSE_ELEMENT            : "{/element}" > { resetState(); } : DEFAULT
 
 | < DECL_BEGIN_PARAM             : "{@param"        > : IN_CMD_TAG
 | < DECL_BEGIN_OPT_PARAM         : "{@param?"       > : IN_CMD_TAG
 | < DECL_BEGIN_INJECT_PARAM      : "{@inject"       > : IN_CMD_TAG
 | < DECL_BEGIN_OPT_INJECT_PARAM  : "{@inject?"      > : IN_CMD_TAG
 
-| < DECL_BEGIN_STATE_VAR         : "{@state"        > : IN_CMD_TAG
+| < DECL_BEGIN_STATE_VAR          : "{@state"        > : IN_CMD_TAG
 
 | < XXX_BRACE_INVALID            : "}"              >  // catch and die on an unexpected right brace
 | < CMD_FULL_SP                  : "{sp}"           >
@@ -1014,8 +952,10 @@ TOKEN_MGR_DECLS: {
 | < CMD_BEGIN_PRINT              : "{print" <WS>    > : EXPR
 | < CMD_BEGIN_IMPLICIT_PRINT     : "{"              > : EXPR
 
-| < CMD_BEGIN_VELOG                : "{velog" <WS>      > : IN_CMD_TAG
-| < CMD_CLOSE_VELOG                : "{/velog}"         >
+| < CMD_BEGIN_KEY                : "{key" <WS>      > : EXPR
+
+| < CMD_BEGIN_VELOG              : "{velog" <WS>    > : EXPR
+| < CMD_CLOSE_VELOG              : "{/velog}"       >
 }
 
 
@@ -1031,6 +971,7 @@ TOKEN_MGR_DECLS: {
 <IN_CMD_TAG> TOKEN: {
   < NAME: <RAW_IDENT> >
 | < CMD_COLON: ":" > : EXPR  // for type expressions or param/let expressions
+| < CMD_COLON_EQ: ":=" > : EXPR  // @state declarations where the type is inferred
 | < CMD_EQ: "=" >
 | < CMD_DOT: "." >
 }
@@ -1057,13 +998,13 @@ TOKEN_MGR_DECLS: {
 // -------------------------------------------------------------------------------------------------
 // Text.
 
-// TODO(b/63212073): Each of these tokens comprises of 1 character, so there end up being an awful
-// lot of them.  Each character of input source turns into a Token which is probably the slowest
-// part of the parser.  consider consuming sequences of raw text in single tokens.  e.g. ~["{"]
-// might work, but it would require assistence from other parts of the parser and thus measurement.
+// Tokens for supporting raw text and whitespace matching
 <TEMPLATE_DEFAULT> TOKEN: {
-  < TOKEN_WS: <WS> >
-| < TOKEN_NOT_WS: <NOT_WS> >
+  < TOKEN_WS: ( <WS> )+ >
+  // This complex token is any sequence of non whitespace non '/' non "{" or a single '/' character
+  // This ensures that it isn't ambiguous with other tokens in TEMPLATE_DEFAULT like comments,
+  // TOKEN_WS or any of the command tokens.
+| < TOKEN_NOT_WS: (~[" ", "\t", "\n", "\r", "/", "{", "}"])+ | "/" >
 }
 
 
@@ -1095,10 +1036,10 @@ TOKEN_MGR_DECLS: {
 //
 
 <EXPR, EXPR_NO_DOUBLE_QUOTE> TOKEN: {
-  < SINGLE_QUOTE: "'" > { pushState(IN_SQ_STRING); }
+  < SINGLE_QUOTE: "'" >
 }
 <EXPR, EXPR_NO_SINGLE_QUOTE> TOKEN: {
-  < DOUBLE_QUOTE: "\"" > { pushState(IN_DQ_STRING); }
+  < DOUBLE_QUOTE: "\"" >
 }
 
 <IN_SQ_STRING> TOKEN: {
@@ -1126,32 +1067,33 @@ TOKEN_MGR_DECLS: {
 // Operators.
 
 <EXPR, EXPR_NO_DOUBLE_QUOTE, EXPR_NO_SINGLE_QUOTE> TOKEN: {
-  < QMARK: "?" >    // Precedence 1 operators
-| < COLON: ":" >    // Also used as part of part of map literal syntax
+  < QMARK: "?" >      // Precedence 1 operators
+| < COLON: ":" >      // Also used as part of part of map literal syntax
 | < QCOLON: "?:" >
-| < OR: "or" >      // Precedence 2 operators
-| < AND: "and" >    // Precedence 3 operators
-| < EQ: "==">       // Precedence 4 operators
+| < OR: "or" >        // Precedence 2 operators
+| < AND: "and" >      // Precedence 3 operators
+| < DOUBLE_EQ: "==">  // Precedence 4 operators
 | < NOT_EQ: "!=" >
-| < LANGLE: "<" >   // Precedence 5 operators
+| < LANGLE: "<" >     // Precedence 5 operators
 | < RANGLE: ">" >
 | < LT_EQ: "<=" >
 | < GT_EQ: ">=" >
-| < PLUS: "+">      // Precedence 6 operators
-| < MINUS: "-">     // Precedence 6 as a binary operator and 8 as a unary operator
-| < TIMES: "*">     // Precedence 7 operators
+| < PLUS: "+">        // Precedence 6 operators
+| < MINUS: "-">       // Precedence 6 as a binary operator and 8 as a unary operator
+| < TIMES: "*">       // Precedence 7 operators
 | < DIV: "/">
 | < MOD: "%">
-| < NOT: "not" >    // Precedence 8 as a unary operator (along with MINUS)
-| < DOT: "." >      // Precedence 9 operators
+| < NOT: "not" >      // Precedence 8 as a unary operator (along with MINUS)
+| < DOT: "." >        // Precedence 9 operators
 | < QDOT: "?." >
-| < LBRACKET: "[" > // Precedence 9 data access operators and part of legacy map literal syntax
+| < LBRACKET: "[" >   // Precedence 9 data access operators and part of legacy map literal syntax
 | < RBRACKET: "]" >
 | < QLBRACKET: "?[" >
-| < COMMA: "," >    // Not actually an operator, part of map/list literal syntax
+| < COMMA: "," >      // Not actually an operator, part of map/list literal syntax
 | < LPAREN: "(" >
 | < RPAREN: ")" >
-| < VBAR: "|" > // an operator for type unions
+| < VBAR: "|" >       // an operator for type unions
+| < EQ: "=" >         // For state assignments and attribute value pairs in EXPR
 }
 
 
@@ -1160,8 +1102,6 @@ TOKEN_MGR_DECLS: {
 
 <EXPR, EXPR_NO_DOUBLE_QUOTE, EXPR_NO_SINGLE_QUOTE> TOKEN: {
   < IDENT: <RAW_IDENT> >
-  // N.B. <IJ> needs to be defined above <DOLLAR_IDENT> so $ij isn't parsed as <DOLLAR_IDENT>
-| < IJ:  "$ij" >
 | < DOLLAR_IDENT: "$" <IDENT> >
 }
 
@@ -1182,6 +1122,7 @@ TOKEN_MGR_DECLS: {
 | < UNEXPECTED_NAMESPACE    : "{namespace" >
 | < UNEXPECTED_DELPACKAGE   : "{delpackage" >
 | < UNEXPECTED_TEMPLATE     : "{template" >
+| < UNEXPECTED_ELEMENT      : "{element" >
 | < UNEXPECTED_DELTEMPLATE  : "{deltemplate" >
 }
 
@@ -1192,7 +1133,6 @@ TOKEN_MGR_DECLS: {
 
 <*> TOKEN: {
   < #WS: [" ", "\t", "\n", "\r"] | "\r\n" >
-| < #NOT_WS: ~[" ","\t","\n","\r"] >
 | < #RAW_IDENT: ["a"-"z","A"-"Z","_"] ( ["a"-"z","A"-"Z","_","0"-"9"] )* >
 | < #DEC_DIGITS: ( ["0"-"9"] )+ >
 | < #HEX_DIGIT: ["0"-"9","A"-"F","a"-"f"] >
@@ -1245,8 +1185,7 @@ private SoyFileNode SoyFile() :
 
   {
     headerInfo = new SoyFileHeaderInfo(errorReporter, delpackageName, namespace, aliases);
-    SoyFileNode sfn =
-        new SoyFileNode(nodeIdGen.genId(), filePath, soyFileKind, namespace, headerInfo);
+    SoyFileNode sfn = new SoyFileNode(nodeIdGen.genId(), filePath, namespace, headerInfo);
   }
 
   (
@@ -1274,14 +1213,13 @@ private AliasDeclaration Alias() :
 {
   Token open, close;
   Identifier namespace, alias = null;
-  Token as = null;
 }
 {
   (
     open = <ALIAS_OPEN>
     namespace = Identifier()
     [
-      as = Keyword("as")
+      Keyword("as")
       alias = Identifier()
     ]
     close = <CMD_END>
@@ -1323,7 +1261,7 @@ private NamespaceDeclaration Namespace() :
 
 
 /**
- * Matches a sequence of attributes in IN_CMD_TAG lexical state.
+ * Matches a sequence of attributes.
  *
  * Attributes -> ( Attribute )*
  */
@@ -1353,137 +1291,119 @@ private List<CommandTagAttribute> Attributes() :
 
 
 /**
- * Matches an attribute in IN_CMD_TAG lexical state. Uses special tokens to parse attributes that
- * require an expression as the attribute value, e.g. data=""
+ * Matches an attribute. Uses special tokens to parse attributes that require an expression as the
+ * attribute value, e.g. data=""
  *
  * Attribute -> ( Name CmdEq CmdQuote AttributeValue
  *              | ( DataAttr | VariantAttr ) Expr DoubleQuote )
  */
 private CommandTagAttribute Attribute() :
 {
-  Token name, value, attrTag;
-  String attrName;
+  Identifier name;
+  Token nameToken, value;
   ImmutableList<ExprNode> exprList = ImmutableList.of();
   Token qToken;
   QuoteStyle quoteStyle;
 }
 {
+  { checkState(token_source.curLexState == IN_CMD_TAG || token_source.curLexState == EXPR); }
+  // We could be coming from either IN_CMD_TAG or EXPR lexical state, the next token has already
+  // been tokenized (but not consumed) by the parser (to determine if it should take this path) and
+  // the token type has already been set on the token based on the lexical state we're coming from.
+  // So expect either a <NAME> or an <IDENT> here, which are the same thing but from the IN_CMD_TAG
+  // state or the EXPR state.
   (
-    // Non-expression attributes
-    name = <NAME>
-    <CMD_EQ>
+    nameToken = <NAME>
+  |
+    nameToken = <IDENT>
+  )
+  {
+    name = Identifier.create(nameToken.image, createSrcLoc(nameToken));
+    // At this point we have an attribute, so make sure we're in the IN_CMD_TAG lexical state, which
+    // is required to parse the attribute (this will switch EXPR to IN_CMD_TAG, if already in
+    // IN_CMD_TAG this is a no-op). We only want to do this when we're sure we have an attribute
+    // because if there is no attribute, the next token will be a "}", which will switch the lexical
+    // state to TEMPLATE_DEFAULT so we can parse the template contents. At this point, if the next
+    // token is a "}" it will already have been tokenized and the lexical state will have already
+    // switched to TEMPLATE_DEFAULT, so we don't override that here.
+    token_source.SwitchTo(IN_CMD_TAG);
+  }
+  <CMD_EQ>
+  (
+    // Expression attributes
+    LOOKAHEAD( { EXPR_ATTR_NAMES.contains(name.identifier()) } )
     (
       <CMD_DOUBLE_QUOTE>
-      value = <DQ_ATTRIBUTE_VALUE>
-      { quoteStyle = QuoteStyle.DOUBLE; }
-    |
-      <CMD_SINGLE_QUOTE>
-      value = <SQ_ATTRIBUTE_VALUE>
-      { quoteStyle = QuoteStyle.SINGLE; }
-    )
-    {
-      return new CommandTagAttribute(
-          Identifier.create(name.image, createSrcLoc(name)),
-          quoteStyle,
-          value.image,
-          createSrcLoc(value));
-    }
-  |
-    // Expression attributes
-    (
-      { quoteStyle = QuoteStyle.DOUBLE; }
-      (
-        attrTag = <DATA_ATTR_DQ>
-        { attrName = "data"; }
-      |
-        attrTag = <VARIANT_ATTR_DQ>
-        { attrName = "variant"; }
-      |
-        attrTag = <GENDERS_ATTR_DQ>
-        { attrName = "genders"; }
-      |
-        attrTag = <LOGONLY_ATTR_DQ>
-        { attrName = "logonly"; }
-      )
+      {
+        quoteStyle = QuoteStyle.DOUBLE;
+        token_source.SwitchTo(EXPR_NO_DOUBLE_QUOTE);
+      }
 
       try {
-        // Allow this to be optional to yield a better error message below.  Otherwise we will report
+        // Allow this to be optional to yield a better error message below. Otherwise we will report
         // that double quotes aren't usable as soy strings.
         [
           exprList = ExprList()
         ]
         qToken = <END_DQ_EXPR_ATTR>
+        {
+          token_source.SwitchTo(IN_CMD_TAG);
+        }
       } catch (ParseException e) {
-        exprList = ImmutableList.<ExprNode>of(errorExpr(e.currentToken));
+        token_source.SwitchTo(IN_CMD_TAG);
+        exprList = ImmutableList.of(errorExpr(e.currentToken));
         qToken = reportTemplateBodyErrorAndSkipTo(e, DOUBLE_QUOTE);
       }
     |
-      { quoteStyle = QuoteStyle.SINGLE; }
-      (
-        attrTag = <DATA_ATTR_SQ>
-        { attrName = "data"; }
-      |
-        attrTag = <VARIANT_ATTR_SQ>
-        { attrName = "variant"; }
-      |
-        attrTag = <GENDERS_ATTR_SQ>
-        { attrName = "genders"; }
-      |
-        attrTag = <LOGONLY_ATTR_SQ>
-        { attrName = "logonly"; }
-      )
+      <CMD_SINGLE_QUOTE>
+      {
+        quoteStyle = QuoteStyle.SINGLE;
+        token_source.SwitchTo(EXPR_NO_SINGLE_QUOTE);
+      }
 
       try {
-        // Allow this to be optional to yield a better error message below.  Otherwise we will report
+        // Allow this to be optional to yield a better error message below. Otherwise we will report
         // that double quotes aren't usable as soy strings.
         [
           exprList = ExprList()
         ]
         qToken = <END_SQ_EXPR_ATTR>
+        {
+          token_source.SwitchTo(IN_CMD_TAG);
+        }
       } catch (ParseException e) {
-        exprList = ImmutableList.<ExprNode>of(errorExpr(e.currentToken));
+        token_source.SwitchTo(IN_CMD_TAG);
+        exprList = ImmutableList.of(errorExpr(e.currentToken));
         qToken = reportTemplateBodyErrorAndSkipTo(e, SINGLE_QUOTE);
       }
     )
     {
       if (exprList.isEmpty()) {
         errorReporter.report(createSrcLoc(qToken), PARSER_ERROR, qToken.image, "an expression");
-        exprList = ImmutableList.<ExprNode>of(errorExpr(qToken));
+        exprList = ImmutableList.of(errorExpr(qToken));
       }
-      return new CommandTagAttribute(Identifier.create(attrName, createSrcLoc(attrTag)), quoteStyle, exprList);
+      return new CommandTagAttribute(
+          Identifier.create(name.identifier(), name.location()),
+          quoteStyle,
+          exprList);
+    }
+  |
+    // Non-expression attributes
+    (
+      <CMD_DOUBLE_QUOTE>
+      { token_source.pushState(IN_DQ_ATTRIBUTE_VALUE); }
+      value = <DQ_ATTRIBUTE_VALUE>
+      { quoteStyle = QuoteStyle.DOUBLE; }
+    |
+      <CMD_SINGLE_QUOTE>
+      { token_source.pushState(IN_SQ_ATTRIBUTE_VALUE); }
+      value = <SQ_ATTRIBUTE_VALUE>
+      { quoteStyle = QuoteStyle.SINGLE; }
+    )
+    {
+      return new CommandTagAttribute(name, quoteStyle, value.image, createSrcLoc(value));
     }
   )
-}
-
-
-/**
- * Matches an attribute in EXPR lexical state.
- *
- * ExprAttribute -> Ident EqQuote AttributeValue
- */
-private CommandTagAttribute ExprAttribute() :
-{
-  Token name, value;
-  QuoteStyle quoteStyle;
-}
-{
-  name = <IDENT>
-  (
-    <EQ_DOUBLE_QUOTE>
-    value = <DQ_ATTRIBUTE_VALUE>
-    {quoteStyle = QuoteStyle.DOUBLE; }
-  |
-    <EQ_SINGLE_QUOTE>
-    value = <SQ_ATTRIBUTE_VALUE>
-    {quoteStyle = QuoteStyle.SINGLE; }
-  )
-  {
-    return new CommandTagAttribute(
-        Identifier.create(name.image, createSrcLoc(name)),
-        quoteStyle,
-        value.image,
-        createSrcLoc(value));
-  }
 }
 
 
@@ -1513,75 +1433,108 @@ private Identifier DelPackage() :
  */
 private TemplateNode Template(SoyFileHeaderInfo soyFileHeaderInfo) :
 {
-  Token open;
+  Token open, close = null;
   TemplateNode templateNode = null;
-  TemplateNodeBuilder builder;
+  RawTextNode initialWhitespace = null;
+  List<StandaloneNode> templateBodyNodes = null;
 }
 {
   (
     open = <TEMPLATE_OPEN>
-    { builder = new TemplateBasicNodeBuilder(soyFileHeaderInfo, errorReporter); }
+    { TemplateBasicNodeBuilder builder = new TemplateBasicNodeBuilder(soyFileHeaderInfo, errorReporter); }
     try {
-      templateNode = TemplateHelper(builder, open, false)
-      <CMD_CLOSE_TEMPLATE>
+      TemplateOpenTagHelper(builder, open, false)
+      { whitespaceMode = builder.getWhitespaceMode(); }
+      initialWhitespace = TemplateHeader(builder, /* allowState=*/ false)
+      templateBodyNodes = TemplateBlock()
+      close = <CMD_CLOSE_TEMPLATE>
+      {
+        builder.setSourceLocation(createSrcLoc(open, close));
+        templateNode = builder.build();
+      }
+
     } catch (ParseException e) {
       reportFileErrorAndSkipTo(e, CMD_CLOSE_TEMPLATE);
+      return null;  // continue trying to parse other templates
     } catch (AbortParsingError e) {
       // do nothing, continue trying to parse other templates
       return null;
     }
   |
     open = <DELTEMPLATE_OPEN>
-    { builder = new TemplateDelegateNodeBuilder(soyFileHeaderInfo, errorReporter); }
+    { TemplateDelegateNodeBuilder builder = new TemplateDelegateNodeBuilder(soyFileHeaderInfo, errorReporter); }
     try {
-      templateNode = TemplateHelper(builder, open, true)
-      <CMD_CLOSE_DELTEMPLATE>
+      TemplateOpenTagHelper(builder, open, true)
+      { whitespaceMode = builder.getWhitespaceMode(); }
+      initialWhitespace = TemplateHeader(builder, /* allowState=*/ false)
+      templateBodyNodes = TemplateBlock()
+      close = <CMD_CLOSE_DELTEMPLATE>
+      {
+        builder.setSourceLocation(createSrcLoc(open, close));
+        templateNode = builder.build();
+      }
     } catch (ParseException e) {
       reportFileErrorAndSkipTo(e, CMD_CLOSE_DELTEMPLATE);
+      return null;  // continue trying to parse other templates
+    } catch (AbortParsingError e) {
+      // do nothing, continue trying to parse other templates
+      return null;
+    }
+  |
+    open = <ELEMENT_OPEN>
+    { TemplateElementNodeBuilder builder = new TemplateElementNodeBuilder(soyFileHeaderInfo, errorReporter); }
+    try {
+      TemplateOpenTagHelper(builder, open, false)
+      initialWhitespace = TemplateHeader(builder, /* allowState=*/ true)
+      templateBodyNodes = TemplateBlock()
+      close = <CMD_CLOSE_ELEMENT>
+      {
+        builder.setSourceLocation(createSrcLoc(open, close));
+        templateNode = builder.build();
+      }
+    } catch (ParseException e) {
+      reportFileErrorAndSkipTo(e, CMD_CLOSE_ELEMENT);
+      return null;  // continue trying to parse other templates
     } catch (AbortParsingError e) {
       // do nothing, continue trying to parse other templates
       return null;
     }
   )
-  { return templateNode; }
+  {
+    if (initialWhitespace != null) {
+      templateNode.addChild(initialWhitespace);
+    }
+    if (templateBodyNodes != null) {
+      templateNode.addChildren(templateBodyNodes);
+    }
+    return templateNode;
+  }
 }
 
 
 /**
  * A helper for parsing everything except the open and close tags of a template.
  *
- * TemplateHelper -> TemplateName Attributes CmdEnd TemplateHeader TemplateBlock
+ * TemplateOpenTagHelper -> TemplateName Attributes CmdEnd
  *
  * @param builder Template node builder.
  * @param open The {template or {deltemplate token.
  * @param isDeltemplate True if the template is a deltemplate.
  */
-private TemplateNode TemplateHelper(TemplateNodeBuilder builder, Token open, boolean isDeltemplate) :
+private void TemplateOpenTagHelper(TemplateNodeBuilder builder, Token open, boolean isDeltemplate) :
 {
   Identifier templateName;
   List<CommandTagAttribute> attributes;
   Token close;
-  RawTextNode initialWhitespace;
-  List<StandaloneNode> templateBodyNodes;
 }
 {
   {
     // eagerly fetch the id to be backwards compatible.  if we delay allocating, all the ids in the
-    // file will change.  TODO(user): remove ids
+    // file will change.  TODO(b/32224284): remove ids
     builder.setId(nodeIdGen.genId());
   }
 
-  templateName = TemplateName()
-  {
-    if (!isDeltemplate && templateName.type() != Identifier.Type.DOT_IDENT) {
-      errorReporter.report(
-          templateName.location(), INVALID_TEMPLATE_NAME, templateName.identifier());
-    }
-    if (isDeltemplate && templateName.type() == Identifier.Type.DOT_IDENT) {
-      errorReporter.report(
-          templateName.location(), INVALID_DELTEMPLATE_NAME, templateName.identifier());
-    }
-  }
+  templateName = TemplateNameInDef(isDeltemplate)
 
   attributes = Attributes()
   {
@@ -1594,21 +1547,32 @@ private TemplateNode TemplateHelper(TemplateNodeBuilder builder, Token open, boo
       builder.setSoyDoc(soyDoc.image, createSrcLoc(soyDoc));
     }
   }
-
   close = <CMD_END>
-  { builder.setSourceLocation(createSrcLoc(open, close)); }
+  { builder.setOpenTagLocation(createSrcLoc(open, close)); }
+}
 
-  initialWhitespace = TemplateHeader(builder)
-  templateBodyNodes = TemplateBlock()
 
+/**
+ * A helper for parsing template name in the {template}, {deltemplate} or {element} definition.
+ * @param isDeltemplate True if the template is a deltemplate.
+ */
+private Identifier TemplateNameInDef(boolean isDeltemplate) :
+{
+  Identifier templateName;
+}
+{
+  templateName = TemplateName()
   {
-    TemplateNode templateNode = builder.build();
-    if (initialWhitespace != null) {
-      templateNode.addChild(initialWhitespace);
+    if (!isDeltemplate && templateName.type() != Identifier.Type.DOT_IDENT) {
+      errorReporter.report(
+          templateName.location(), INVALID_TEMPLATE_NAME, templateName.identifier());
+    } else if (isDeltemplate && templateName.type() == Identifier.Type.DOT_IDENT) {
+      errorReporter.report(
+          templateName.location(), INVALID_DELTEMPLATE_NAME, templateName.identifier());
     }
-    templateNode.addChildren(templateBodyNodes);
-    return templateNode;
   }
+
+  { return templateName; }
 }
 
 
@@ -1692,7 +1656,7 @@ private void SkipWhitespace() : { }
 private RawTextNode RawText() :
 {
   Token token;
-  RawTextBuilder builder = new RawTextBuilder(filePath, nodeIdGen);
+  RawTextBuilder builder = new RawTextBuilder(filePath, nodeIdGen, whitespaceMode);
 }
 {
   // There is a choice conflict here because given a sequence of two characters we could parse it
@@ -1743,20 +1707,22 @@ private RawTextNode RawText() :
  * text node is ambiguous.  So if there is a trailing piece of non-trivial whitespace it will be
  * consumed here, and returned as RawTextNode.
  */
-private RawTextNode TemplateHeader(TemplateNodeBuilder templateBuilder) :
+private RawTextNode TemplateHeader(TemplateNodeBuilder templateBuilder, boolean allowState) :
 {
   Token tok;
-  HeaderParam param;
-  List<HeaderParam> params = ImmutableList.of();
-  TemplateStateVar stateVar;
-  ImmutableList.Builder<TemplateStateVar> stateVars = ImmutableList.builder();
+  TemplateHeaderVarDefn param;
+  List<TemplateParam> params = ImmutableList.of();
   RawTextNode whitespace = null;
   String soyDoc = null;
+  List<TemplateStateVar> stateVars = ImmutableList.of();
+
 }
 {
   ( LOOKAHEAD(1)  // prefer consuming whitespace here instead of in a subsequent RawTextNode
     (
-      { RawTextBuilder builder = new RawTextBuilder(filePath, nodeIdGen); }
+      {
+        RawTextBuilder builder = new RawTextBuilder(filePath, nodeIdGen, whitespaceMode);
+      }
 
       ( LOOKAHEAD(1)  // prefer staying in the loop
         tok = <TOKEN_WS>
@@ -1771,31 +1737,39 @@ private RawTextNode TemplateHeader(TemplateNodeBuilder templateBuilder) :
     |
       param = ParamDecl(soyDoc)
       {
-        // we just parsed a param, preceding whitespace/doc comments are not important
-        whitespace = null;
-        soyDoc = null;
-        if (params.isEmpty()) {
-          params = new ArrayList<HeaderParam>();
-        }
-        params.add(param);
-      }
-    |
-      stateVar = StateVarDecl(soyDoc)
-      {
-        if (!experimentalFeatures.contains("state_vars")) {
-         errorReporter.report(stateVar.nameLocation(), STATE_VARS_NOT_ALLOWED);
-        } else {
-          // We just parsed a state var, preceding whitespace/doc comments are not important.
-          whitespace = null;
-          soyDoc = null;
-          stateVars.add(stateVar);
+        switch (param.kind()) {
+          case PARAM:
+            // we just parsed a param, preceding whitespace/doc comments are not important
+            whitespace = null;
+            soyDoc = null;
+            if (params.isEmpty()) {
+              params = new ArrayList<TemplateParam>();
+            }
+            params.add((TemplateParam) param);
+            break;
+          case STATE:
+            if (allowState) {
+              if (stateVars.isEmpty()) {
+                stateVars = new ArrayList<TemplateStateVar>();
+              }
+              stateVars.add((TemplateStateVar) param);
+            } else {
+              errorReporter.report(param.nameLocation(), STATE_IN_TEMPLATE);
+            }
+            break;
+          case LOCAL_VAR:
+          case UNDECLARED:
+            throw new AssertionError("unexpected var kind: " + param.kind());
         }
       }
     )
   )*
 
-  { templateBuilder.addParams(params);
-    templateBuilder.setStateVars(stateVars.build());
+  {
+    templateBuilder.addParams(params);
+    if (allowState) {
+      ((TemplateElementNodeBuilder) templateBuilder).setStateVars(stateVars);
+    }
     return whitespace;
   }
 }
@@ -1807,15 +1781,14 @@ private RawTextNode TemplateHeader(TemplateNodeBuilder templateBuilder) :
  *
  * @param desc The doc comment that was attached to whitespace preceding this param, if any.
  */
-private HeaderParam ParamDecl(@Nullable String desc) :
+private TemplateHeaderVarDefn ParamDecl(@Nullable String desc) :
 {
-  Token ws, tagBegin, name, tagEnd;
+  Token tagBegin, name;
   TypeNode paramTypeNode = null;
-  SoyType paramType = ErrorType.getInstance();
-  String cmdText;
-  Token blockDocComment;
+  ExprNode value = null;
   boolean optional = false;
   boolean inject = false;
+  boolean stateVar = false;
 }
 {
   (
@@ -1823,6 +1796,7 @@ private HeaderParam ParamDecl(@Nullable String desc) :
   | tagBegin = <DECL_BEGIN_OPT_PARAM>  { optional = true; }
   | tagBegin = <DECL_BEGIN_INJECT_PARAM>  { inject = true; }
   | tagBegin = <DECL_BEGIN_OPT_INJECT_PARAM> { inject = true; optional = true; }
+  | tagBegin = <DECL_BEGIN_STATE_VAR> { stateVar = true; }
   )
   // If there is a special token directly attached to the {@param, use that instead of whatever
   // was passed to us.
@@ -1833,14 +1807,21 @@ private HeaderParam ParamDecl(@Nullable String desc) :
 
   name = <NAME>
 
-  <CMD_COLON>
-
   try {
-    paramTypeNode = TypeExpr()
-    { paramType = typeNodeConverter.getOrCreateType(paramTypeNode); }
-    tagEnd = <CMD_END>
+    (
+      <CMD_COLON>
+      paramTypeNode = TypeExpr()
+      [
+        <EQ>
+        value = Expr()
+      ]
+    |
+      <CMD_COLON_EQ>
+      value = Expr()
+    )
+    <CMD_END>
   } catch (ParseException parseException) {
-    tagEnd = reportTemplateBodyErrorAndSkipTo(parseException, CMD_END);
+    reportTemplateBodyErrorAndSkipTo(parseException, CMD_END);
   }
 
   {
@@ -1848,56 +1829,61 @@ private HeaderParam ParamDecl(@Nullable String desc) :
       // trim the leading /** and trailing */ as well as the whitespace from the doc comment.
       desc = desc.substring(3, desc.length() - 2).trim();
     }
-    return new HeaderParam(
-        name.image,
-        createSrcLoc(name),
-        // Optional params become nullable
-        optional ? typeRegistry.getOrCreateUnionType(paramType, NullType.getInstance()) : paramType,
-        paramTypeNode,
-        // the param is required if it isn't optional and the parsed type isn't nullable.
-        !optional && !SoyTypes.isNullable(paramType),
-        inject,
-        desc);
-  }
-}
-
-/**
- * StateVarDecl -> ( DECL_BEGIN_STATE_VAR ) <NAME> <CMD_COLON>
- *                 TypeExpr() <CMD_END>
- *
- * @param desc The doc comment that was attached to whitespace preceding this param, if any.
- *
- * TODO(b/111998618): Support initialization from an expression.
- */
-private TemplateStateVar StateVarDecl(@Nullable String desc) :
-{
-  Token stateVarBegin, name, stateVarEnd;
-  TypeNode stateVarTypeNode = null;
-  SoyType stateVarType = ErrorType.getInstance();
-}
-{
-  (
-    stateVarBegin = <DECL_BEGIN_STATE_VAR>
-  )
-
-  name = <NAME>
-
-  <CMD_COLON>
-
-  try {
-    stateVarTypeNode = TypeExpr()
-    { stateVarType = typeNodeConverter.getOrCreateType(stateVarTypeNode); }
-    stateVarEnd = <CMD_END>
-  } catch (ParseException parseException) {
-    stateVarEnd = reportTemplateBodyErrorAndSkipTo(parseException, CMD_END);
-  }
-  {
-    return new TemplateStateVar(
-        name.image,
-        stateVarType,
-        stateVarTypeNode,
-        desc,
-        createSrcLoc(name));
+    if (stateVar) {
+      if (value == null) {
+        errorReporter.report(createSrcLoc(tagBegin), STATE_REQUIRES_VALUE);
+        value = errorExpr(name);
+      }
+      return new TemplateStateVar(
+          name.image,
+          paramTypeNode,
+          value,
+          desc,
+          createSrcLoc(name));
+    } else {
+      boolean isNullable = false;
+      if (paramTypeNode instanceof UnionTypeNode) {
+        UnionTypeNode utn = (UnionTypeNode) paramTypeNode;
+        for (TypeNode tn : utn.candidates()) {
+          if (tn instanceof NamedTypeNode && ((NamedTypeNode) tn).name().equals("null")) {
+            isNullable = true;
+            break;
+          }
+        }
+      } else if (paramTypeNode instanceof NamedTypeNode
+          && ((NamedTypeNode) paramTypeNode).name().equals("null")) {
+        isNullable = true;
+      }
+      // Optional params become nullable
+      if (optional && !isNullable && paramTypeNode != null) {
+        NamedTypeNode nullType = NamedTypeNode.create(paramTypeNode.sourceLocation(), "null");
+        paramTypeNode = paramTypeNode instanceof UnionTypeNode
+            ? UnionTypeNode.create(
+                ImmutableList.<TypeNode>builder()
+                    .addAll(((UnionTypeNode) paramTypeNode).candidates())
+                    .add(nullType)
+                    .build())
+            : UnionTypeNode.create(ImmutableList.of(paramTypeNode, nullType));
+      }
+      if (value != null) {
+        if (inject) {
+          errorReporter.report(createSrcLoc(tagBegin), INJECT_DEFAULT_PARAM);
+        } else if (optional) {
+          errorReporter.report(createSrcLoc(tagBegin), OPTIONAL_DEFAULT_PARAM);
+        }
+      }
+      return new TemplateParam(
+          name.image,
+          createSrcLoc(name),
+          // Optional params become nullable
+          paramTypeNode,
+          // the param is required if there isn't a default value, it isn't optional and the parsed
+          // type isn't nullable.
+          value == null && !optional && !isNullable,
+          inject,
+          desc,
+          value);
+    }
   }
 }
 
@@ -1966,7 +1952,7 @@ private StatementNode Stmt() :
 }
 
 /**
- * NonPrintableStmt -> LetStmt | LogStmt | DebuggerStmt
+ * NonPrintableStmt -> LetStmt | LogStmt | DebuggerStmt | KeyStmt
  */
 private StatementNode NonPrintableStmt() :
 {
@@ -1978,6 +1964,7 @@ private StatementNode NonPrintableStmt() :
   | stmt = LogStmt()
   | stmt = DebuggerStmt()
   | stmt = VeLogStmt()
+  | stmt = KeyStmt()
   )
 
   { return stmt; }
@@ -2115,7 +2102,7 @@ private List<StandaloneNode> TemplateBlockForMsg() :
   // This will make it possible to detect if a leading {plural} or {select} was preceeded by content
   [ LOOKAHEAD(1)  // prefer taking this branch over skipping and consuming as RawText
     { Token tok;
-      RawTextBuilder builder = new RawTextBuilder(filePath, nodeIdGen);
+      RawTextBuilder builder = new RawTextBuilder(filePath, nodeIdGen, whitespaceMode);
     }
     ( LOOKAHEAD(1)  // prefer staying in the loop
       tok = <TOKEN_WS>
@@ -2175,7 +2162,7 @@ private List<StandaloneNode> TemplateBlockForMsg() :
 
 
 /**
- * MsgPlural -> CmdBeginPlural Expr [ ExprAttribute ] CmdEnd SkipWhitespace
+ * MsgPlural -> CmdBeginPlural Expr [ Attribute ] CmdEnd SkipWhitespace
  *              ( CmdBeginCase Expr CmdEnd TemplateBlockForMsg )*
  *              CmdFullDefault TemplateBlockForMsg CmdClosePlural
  */
@@ -2192,7 +2179,7 @@ private MsgPluralNode MsgPlural() :
   tagBegin = <CMD_BEGIN_PLURAL>
   try {
     pluralExpr = Expr()
-    [ offsetAttr = ExprAttribute() ]
+    [ offsetAttr = Attribute() ]
     tagEnd = <CMD_END>
   } catch (ParseException e) {
     pluralExpr = errorExpr(tagBegin);
@@ -2371,19 +2358,16 @@ private MsgSelectNode MsgSelect() :
 
 /**
  * PrintStmt -> ( CmdBeginPrint | CmdBeginImplicitPrint ) Expr
- *              [ PrintDirectives ] [ ExprAttribute ] CmdEnd
+ *              [ PrintDirectives ] Attributes CmdEnd
  */
 private PrintNode PrintStmt() :
 {
   Token tagBegin;
   Token tagEnd;
-  Token tok;
-  Token directive;
   boolean isImplicit;
   ExprNode expr = null;
   List<PrintDirectiveNode> directives = ImmutableList.of();
   List<CommandTagAttribute> attributes = ImmutableList.of();
-  CommandTagAttribute attr;
 }
 {
   (
@@ -2394,10 +2378,7 @@ private PrintNode PrintStmt() :
   try {
     expr = Expr()
     directives = PrintDirectives()
-    [
-      attr = ExprAttribute() { attributes = new ArrayList<CommandTagAttribute>(); attributes.add(attr);}
-      [ attr = ExprAttribute() { attributes.add(attr);} ]
-    ]
+    attributes = Attributes()
     tagEnd = <CMD_END>
   } catch (ParseException e) {
     if (expr == null) {
@@ -2465,19 +2446,47 @@ private PrintDirectiveNode PrintDirective() :
       errorReporter.report(createSrcLoc(vbar), UNEXPECTED_PIPE);
     }
     SourceLocation loc = createSrcLoc(vbar, directive);
+    Identifier ident = Identifier.create("|" + directive.image, loc);
     if (!args.isEmpty()) {
       loc.extend(args.get(args.size() - 1).getSourceLocation());
     }
-    String name = "|" + directive.image;
-    return new PrintDirectiveNode(
-        nodeIdGen.genId(),
-        loc,
-        args,
-        pluginResolver.lookupPrintDirective(name, args.size(), loc),
-        /* isSynthetic= */ false);
+    return new PrintDirectiveNode(nodeIdGen.genId(), /* name= */ ident, /* location= */ loc, args);
   }
 }
 
+
+/**
+ * KeyStmt -> CmdBeginKey Expr CmdEnd
+ */
+private KeyNode KeyStmt() :
+{
+  Token tagBegin;
+  Token tagEnd;
+  ExprNode expr = null;
+}
+{
+  (
+    tagBegin = <CMD_BEGIN_KEY>
+  )
+
+  try {
+    expr = Expr()
+    tagEnd = <CMD_END>
+  } catch (ParseException e) {
+    if (expr == null) {
+      expr = errorExpr(tagBegin);
+    }
+    tagEnd = reportTemplateBodyErrorAndSkipTo(e, CMD_END);
+  }
+
+  {
+    KeyNode node = new KeyNode(
+        nodeIdGen.genId(),
+        createSrcLoc(tagBegin, tagEnd),
+        expr);
+    return node;
+  }
+}
 
 
 /**
@@ -2538,12 +2547,11 @@ private LogNode CssStmt() :
 
 /**
  * LetStmt -> CmdBeginLet VarRef
- *            ( ":" Expr CmdSelfClose | [ ExprAttribute ] CmdEnd TemplateBlock CmdCloseLet )
+ *            ( ":" Expr CmdSelfClose | [ Attribute ] CmdEnd TemplateBlock CmdCloseLet )
  */
 private LetNode LetStmt() :
 {
-  Token tagBegin, tagEnd;
-  VarRefNode letVar = null;
+  Token tagBegin, tagEnd, nameTok = null;
   ExprNode valueExpr = null;
   CommandTagAttribute attr = null;
   List<StandaloneNode> templateBlock = ImmutableList.of();
@@ -2552,10 +2560,11 @@ private LetNode LetStmt() :
   tagBegin = <CMD_BEGIN_LET>
 
   try {
-    letVar = VarRef()
+    nameTok = <DOLLAR_IDENT>
   } catch (ParseException e) {
     tagEnd = reportTemplateBodyErrorAndSkipTo(e, CMD_SELF_CLOSE, CMD_END);
-    return new LetValueNode(-1, createSrcLoc(tagBegin, tagEnd), "error", errorExpr(tagBegin));
+    SourceLocation loc = createSrcLoc(tagBegin, tagEnd);
+    return new LetValueNode(-1, loc, "$error", loc, errorExpr(tagBegin));
   }
 
   (
@@ -2575,13 +2584,14 @@ private LetNode LetStmt() :
       return new LetValueNode(
           nodeIdGen.genId(),
           createSrcLoc(tagBegin, tagEnd),
-          letVar.getName(),
+          nameTok.image,
+          createSrcLoc(nameTok),
           valueExpr);
     }
   |
     // Content block
     try {
-      [ attr = ExprAttribute() ]
+      [ attr = Attribute() ]
       tagEnd = <CMD_END>
     } catch (ParseException e) {
       tagEnd = reportTemplateBodyErrorAndSkipTo(e, CMD_END, CMD_SELF_CLOSE);
@@ -2595,7 +2605,8 @@ private LetNode LetStmt() :
           new LetContentNode(
               nodeIdGen.genId(),
               createSrcLoc(tagBegin, tagEnd),
-              letVar.getName(),
+              nameTok.image,
+              createSrcLoc(nameTok),
               attr,
               errorReporter);
       node.addChildren(templateBlock);
@@ -2681,25 +2692,20 @@ private IfNode IfStmt() :
  */
 private VeLogNode VeLogStmt() :
 {
-  Identifier name = null;
+  ExprNode veDataExpr = null;
   Token tagBegin, tagEnd;
-  ExprNode protoExpr = null;
-  ExprNode logonlyExpr = null;
-  List<CommandTagAttribute> attributes = null;
+  List<CommandTagAttribute> attributes = ImmutableList.of();
   List<StandaloneNode> templateBlock;
 }
 {
   tagBegin = <CMD_BEGIN_VELOG>
   try {
-    name = DottedIdent()
+    veDataExpr = Expr()
     attributes = Attributes()
     tagEnd = <CMD_END>
   } catch (ParseException e) {
-    if (name == null) {
-      name = Identifier.create("error", createSrcLoc(tagBegin));
-    }
-    if (attributes == null) {
-      attributes = ImmutableList.of();
+    if (veDataExpr == null) {
+      veDataExpr = errorExpr(tagBegin);
     }
     tagEnd = reportTemplateBodyErrorAndSkipTo(e, CMD_END);
   }
@@ -2713,7 +2719,7 @@ private VeLogNode VeLogStmt() :
     VeLogNode node = new VeLogNode(
         nodeIdGen.genId(),
         createSrcLoc(tagBegin, tagEnd),
-        name,
+        veDataExpr,
         attributes,
         errorReporter);
     node.addChildren(templateBlock);
@@ -2798,24 +2804,30 @@ private SwitchNode SwitchStmt() :
  */
 private ForNode ForStmt() :
 {
-  Token tagBegin, tagEnd, in, ifemptyTag;
-  VarRefNode var = null;
+  Token tagBegin, tagEnd, ifemptyTag, nameTok;
   ExprNode expr = null;
+  String name = null;
+  SourceLocation nameLocation = null;
   List<StandaloneNode> templateBlock;
 }
 {
   tagBegin = <CMD_BEGIN_FOR>
   try {
-    var = VarRef()
-    in = Keyword("in")
+    nameTok = <DOLLAR_IDENT>
+    {
+        name = nameTok.image;
+        nameLocation = createSrcLoc(nameTok);
+    }
+    Keyword("in")
     expr = Expr()
 
     tagEnd = <CMD_END>
   } catch (ParseException e) {
     tagEnd = reportTemplateBodyErrorAndSkipTo(e, CMD_END);
 
-    if (var == null) {
-      var = errorExpr(tagBegin);
+    if (name == null) {
+      name = "$error";
+      nameLocation = createSrcLoc(tagBegin);
     }
     if (expr == null) {
       expr = errorExpr(tagBegin);
@@ -2827,10 +2839,12 @@ private ForNode ForStmt() :
         new ForNode(
             nodeIdGen.genId(),
             createSrcLoc(tagBegin, tagEnd),
-            tagBegin.kind == CMD_BEGIN_FOREACH ? "foreach": "for",
             expr);
     ForNonemptyNode nonEmpty =
-        new ForNonemptyNode(nodeIdGen.genId(), var.getSourceLocation(), var.getName());
+        new ForNonemptyNode(
+            nodeIdGen.genId(),
+            name,
+            nameLocation);
     forNode.addChild(nonEmpty);
   }
 
@@ -2883,7 +2897,7 @@ private LogNode ForeachStmt() : {
  */
 private CallNode CallStmt() :
 {
-  Token tagBegin, tagEnd, callClose;
+  Token tagBegin, tagEnd;
   Identifier calleeName = null;
   List<CommandTagAttribute> attributes = ImmutableList.of();
   List<CallParamNode> params = ImmutableList.of();
@@ -2916,7 +2930,7 @@ private CallNode CallStmt() :
       CallBasicNode node = new CallBasicNode(
           nodeIdGen.genId(),
           createSrcLoc(tagBegin, tagEnd),
-          calleeName.identifier(),
+          calleeName,
           fullName,
           attributes,
           errorReporter);
@@ -2952,7 +2966,7 @@ private CallNode CallStmt() :
       CallDelegateNode node = new CallDelegateNode(
           nodeIdGen.genId(),
           createSrcLoc(tagBegin, tagEnd),
-          calleeName.identifier(),
+          calleeName,
           attributes,
           errorReporter);
       node.addChildren(params);
@@ -2991,7 +3005,7 @@ private List<CallParamNode> CallParams() :
 
 /**
  * CallParam -> CmdBeginParam Ident
- *              ( ":" Expr CmdSelfClose | [ ExprAttribute ] CmdEnd TemplateBlock CmdCloseParam )
+ *              ( ":" Expr CmdSelfClose | [ Attribute ] CmdEnd TemplateBlock CmdCloseParam )
  */
 private CallParamNode CallParam() :
 {
@@ -3039,7 +3053,7 @@ private CallParamNode CallParam() :
     }
   |
     try {
-      [ attr = ExprAttribute() ]
+      [ attr = Attribute() ]
       tagEnd = <CMD_END>
     } catch (ParseException e) {
       tagEnd = reportTemplateBodyErrorAndSkipTo(e, CMD_END, CMD_SELF_CLOSE);
@@ -3189,7 +3203,7 @@ private ExprNode Expr() :
 private ExprNode PrecExpr1() :
 {
   ExprNode expr1, expr2;
-  Token op, op2;
+  Token op;
 }
 {
   { ExprNode expr; }
@@ -3289,7 +3303,7 @@ private ExprNode PrecExpr4() :
   expr = PrecExpr5()
   (
     (
-      op = <EQ>
+      op = <DOUBLE_EQ>
     |
       op = <NOT_EQ>
     )
@@ -3507,7 +3521,7 @@ private ExprNode PrecExpr9() :
 
 
 /**
- * Primary -> "(" Expr ")" | IjRef | VarRef | GlobalOrFunctionCallLike | ListLiteral | Primitive
+ * Primary -> "(" Expr ")" | VarRef | GlobalOrFunctionCallLike | ListLiteral | Primitive
  */
 private ExprNode Primary() :
 {
@@ -3518,8 +3532,6 @@ private ExprNode Primary() :
     <LPAREN>
     primary = Expr()
     <RPAREN>
-  |
-    primary = IjRef()
   |
     primary = VarRef()
   |
@@ -3535,28 +3547,6 @@ private ExprNode Primary() :
 
 
 /**
- * IjRef -> "$ij" "." Ident
- */
-private VarRefNode IjRef() :
-{
-  Token ij;
-  Token ident;
-}
-{
-  ij = <IJ>
-  try {
-    <DOT>
-    ident = <IDENT>
-    { return new VarRefNode(ident.image, createSrcLoc(ij, ident), true, null); }
-  } catch (ParseException e) {
-    SourceLocation loc = createSrcLoc(ij);
-    errorReporter.report(loc, INVALID_VAR_NAME_IJ);
-    return new VarRefNode("ij", loc, false, null);
-  }
-}
-
-
-/**
  * VarRef -> DollarIdent
  */
 private VarRefNode VarRef() :
@@ -3565,7 +3555,7 @@ private VarRefNode VarRef() :
 }
 {
   ident = <DOLLAR_IDENT>
-  { return new VarRefNode(ident.image.substring(1), createSrcLoc(ident), false, null); }
+  { return new VarRefNode(ident.image.substring(1), createSrcLoc(ident), null); }
 }
 
 
@@ -3583,7 +3573,6 @@ private ExprNode GlobalOrFunctionCallLike() :
   Token openParen = null, closeParen = null, paramName;
   ExprNode key, val;
   List<ExprNode> params = new ArrayList<ExprNode>();
-  ImmutableMap.Builder<ExprNode, ExprNode> kvPairs = ImmutableMap.builder();
   Set<String> paramNames;
   List<Identifier> paramIds;
 }
@@ -3603,30 +3592,13 @@ private ExprNode GlobalOrFunctionCallLike() :
     // the map literals separately.
     (
       LOOKAHEAD( {ident.identifier().equals("map")} )
-      [
-        key = Expr()
-        <COLON>
-        val = Expr()
-        { kvPairs.put(key, val); }
-        (
-          // Disambiguate with a trailing comma
-          LOOKAHEAD( { getToken(1).kind == COMMA && getToken(2).kind != RPAREN } )
-          <COMMA>
-          key = Expr()
-          <COLON>
-          val = Expr()
-          { kvPairs.put(key, val); }
-        )*
-        [ <COMMA> ]  // trailing comma
-      ]
-      closeParen = <RPAREN>
       {
-        // Note: the case where there are no keys or values is ambiguous.
-        // It could be a 0-arg function call to a function called "map".
-        // (Function calls and map literals are usually distinguished by their parameter syntax
-        // (positional vs. named), but that's not helpful when there are no params.)
-        SourceLocation srcLoc = ident.location().extend(createSrcLoc(closeParen));
-        return new MapLiteralNode(kvPairs.build(), srcLoc);
+        return MapLiteral(ident);
+      }
+    |
+      LOOKAHEAD( {ident.identifier().equals("ve")} )
+      {
+        return VeLiteral(ident);
       }
     |
       [
@@ -3694,7 +3666,7 @@ private ExprNode GlobalOrFunctionCallLike() :
             AbstractParentExprNode node;
             SourceLocation loc = ident.location().extend(createSrcLoc(closeParen));
             if (isRecord) {
-              node = new RecordLiteralNode(paramIds, loc);
+              node = new RecordLiteralNode(ident, paramIds, loc);
             } else {
               // TODO(user): Also add type, then remove code from RETV
               node = new ProtoInitNode(
@@ -3717,11 +3689,7 @@ private ExprNode GlobalOrFunctionCallLike() :
 
           {
             SourceLocation loc = ident.location().extend(createSrcLoc(closeParen));
-            FunctionNode fnNode =
-                new FunctionNode(
-                    ident.identifier(),
-                    pluginResolver.lookupSoyFunction(ident.identifier(), params.size(), loc),
-                    loc);
+            FunctionNode fnNode = new FunctionNode(ident, loc);
             fnNode.addChildren(params);
             return fnNode;
           }
@@ -3733,23 +3701,67 @@ private ExprNode GlobalOrFunctionCallLike() :
 
   { // If we did not find parens, this is a global node
     if (openParen == null) {
-      return new GlobalNode(headerInfo.resolveAlias(ident.identifier()), ident.location());
+      return new GlobalNode(
+          headerInfo.resolveAlias(ident.identifier()), ident.identifier(), ident.location());
     }
 
     // Check if this is a record. If not, look up ident in the type registry to see if it's a proto.
     // Otherwise, it is a function.
     SourceLocation loc = ident.location().extend(createSrcLoc(closeParen));
     if (isRecord) {
-      return new RecordLiteralNode(ImmutableList.of(), loc);
+      return new RecordLiteralNode(ident, ImmutableList.of(), loc);
     }
-    String name = ident.identifier();
-    String resolvedName = headerInfo.resolveAlias(name);
-    SoyType type = (typeRegistry == null) ? null : typeRegistry.getType(resolvedName);
-    if (type != null && type.getKind() == SoyType.Kind.PROTO) {
-      return new ProtoInitNode(resolvedName, ImmutableList.of(), loc);
-    } else {
-      return new FunctionNode(name, pluginResolver.lookupSoyFunction(name, 0, loc), loc);
-    }
+    return new FunctionNode(ident, loc);
+  }
+}
+
+/** Parses a map literal: {@code map('key': 'value', $key: $value)} */
+private ExprNode MapLiteral(Identifier ident) :
+{
+  ExprNode key, val;
+  Token closeParen;
+  ImmutableMap.Builder<ExprNode, ExprNode> kvPairs = ImmutableMap.builder();
+}
+{
+  [
+    key = Expr()
+    <COLON>
+    val = Expr()
+    { kvPairs.put(key, val); }
+    (
+      // Disambiguate with a trailing comma
+      LOOKAHEAD( { getToken(1).kind == COMMA && getToken(2).kind != RPAREN } )
+      <COMMA>
+      key = Expr()
+      <COLON>
+      val = Expr()
+      { kvPairs.put(key, val); }
+    )*
+    [ <COMMA> ]  // trailing comma
+  ]
+  closeParen = <RPAREN>
+  {
+    // Note: the case where there are no keys or values is ambiguous.
+    // It could be a 0-arg function call to a function called "map".
+    // (Function calls and map literals are usually distinguished by their parameter syntax
+    // (positional vs. named), but that's not helpful when there are no params.)
+    SourceLocation srcLoc = ident.location().extend(createSrcLoc(closeParen));
+    return new MapLiteralNode(ident, kvPairs.build(), srcLoc);
+  }
+}
+
+/** Parses a VE literal: {@code ve(VeName)} */
+private ExprNode VeLiteral(Identifier ident) :
+{
+  Identifier name;
+  Token closeParen;
+}
+{
+  name = Identifier()
+  closeParen = <RPAREN>
+  {
+    SourceLocation srcLoc = ident.location().extend(createSrcLoc(closeParen));
+    return new VeLiteralNode(ident, name, srcLoc);
   }
 }
 
@@ -3806,7 +3818,7 @@ private ExprNode ListLiteral() :
  */
 private PrimitiveNode Primitive() :
 {
-  Token tok, quote;
+  Token tok;
   PrimitiveNode primitive;
 }
 {
@@ -3844,28 +3856,38 @@ private PrimitiveNode Primitive() :
     tok = <FLOAT>
     { primitive = new FloatNode(Double.parseDouble(tok.image), createSrcLoc(tok)); }
   |
-    {QuoteStyle quoteStyle; }
-    (
-      quote = <SINGLE_QUOTE>
-      tok = <SQ_STRING>
-      { quoteStyle = QuoteStyle.SINGLE; }
-    |
-      quote = <DOUBLE_QUOTE>
-      tok = <DQ_STRING>
-      { quoteStyle = QuoteStyle.DOUBLE; }
-    )
-    {
-      SourceLocation loc = createSrcLoc(quote, tok);
-      // strip the final character which is the closing quotation mark.
-      String rawString = tok.image.substring(0, tok.image.length() - 1);
-      String unescaped = SoyParseUtils.unescapeString(rawString, errorReporter, loc);
-      primitive = new StringNode(unescaped, quoteStyle, loc);
-    }
+    primitive = StringLiteral()
   )
 
   { return primitive; }
 }
 
+
+private StringNode StringLiteral() :
+{
+  Token quote, value;
+  QuoteStyle quoteStyle;
+}
+{
+  (
+    quote = <SINGLE_QUOTE>
+    { token_source.pushState(IN_SQ_STRING); }
+    value = <SQ_STRING>
+    { quoteStyle = QuoteStyle.SINGLE; }
+  |
+    quote = <DOUBLE_QUOTE>
+    { token_source.pushState(IN_DQ_STRING); }
+    value = <DQ_STRING>
+    { quoteStyle = QuoteStyle.DOUBLE; }
+  )
+  {
+    SourceLocation loc = createSrcLoc(quote, value);
+    // strip the final character which is the closing quotation mark.
+    String rawString = value.image.substring(0, value.image.length() - 1);
+    String unescaped = SoyParseUtils.unescapeString(rawString, errorReporter, loc);
+    return new StringNode(unescaped, quoteStyle, loc);
+  }
+}
 
 /**
  * A helper to parse a dotted identifier.
@@ -3936,13 +3958,27 @@ private Token Keyword(String keyword) :
 // NOTE: all the tokens we are consuming are defined in the EXPR lexical state.
 
 
+/** Parses a TypeExpr and ensures there's no additional tokens. */
+private TypeNode TypeExprInput() :
+{
+  TypeNode type;
+}
+{
+  type = TypeExpr()
+  <EOF>
+  {
+    return type;
+  }
+}
+
+
 /**
  * TypeExpr -> Primary ( "|" Primary )*
  */
 private TypeNode TypeExpr() :
 {
-  TypeNode first = null;
-  TypeNode next = null;
+  TypeNode first;
+  TypeNode next;
   // lazily allocate the list since most of the time this isn't actually a Union
   List<TypeNode> members = null;
 }
@@ -4059,32 +4095,22 @@ private TypeNode NullType() : {
  */
 private TypeNode NamedType() :
 {
-  Token first, open, close;
-  Token next = null;
-  String ident;
+  Token open, close;
+  Identifier identifier;
   SourceLocation fullLocation;
 
   TypeNode arg;
   List<TypeNode> genericArgs = ImmutableList.of();
-  StringBuilder sb = null;
 }
 {
 
-  first = <IDENT>
-  (
-    <DOT>
-    next = <IDENT>
-    {
-      if (sb == null) {
-        sb = new StringBuilder(first.image);
-      }
-      sb.append('.');
-      sb.append(next.image);
-    }
-  )*
+  identifier = Identifier()
   {
-    ident = headerInfo.resolveAlias(sb == null ? first.image : sb.toString());
-    fullLocation = next == null ? createSrcLoc(first) : createSrcLoc(first, next);
+    // TODO(lukes): we support aliasing list and map.... but why...?
+    identifier = Identifier.create(
+        headerInfo.resolveAlias(identifier.identifier()),
+        identifier.location());
+    fullLocation = identifier.location();
   }
 
   [
@@ -4107,12 +4133,12 @@ private TypeNode NamedType() :
     {
       return GenericTypeNode.create(
           fullLocation.extend(createSrcLoc(close)),
-          ident,
+          identifier,
           genericArgs);
     }
   ]
   {
-    return NamedTypeNode.create(fullLocation, ident);
+    return NamedTypeNode.create(identifier);
   }
 }
 

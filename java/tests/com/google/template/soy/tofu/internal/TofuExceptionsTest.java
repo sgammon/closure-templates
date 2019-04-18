@@ -22,7 +22,6 @@ import static org.junit.Assert.fail;
 
 import com.google.common.base.Joiner;
 import com.google.common.collect.ImmutableMap;
-import com.google.common.collect.ImmutableSortedSet;
 import com.google.common.util.concurrent.Futures;
 import com.google.template.soy.SoyFileSetParserBuilder;
 import com.google.template.soy.data.SoyDict;
@@ -74,8 +73,8 @@ public final class TofuExceptionsTest {
     tofu =
         new BaseTofu(
             new NoOpScopedData(),
-            SoyFileSetParserBuilder.forFileContents(SOY_FILE).parse().registry(),
-            ImmutableMap.<String, ImmutableSortedSet<String>>of());
+            SoyFileSetParserBuilder.forFileContents(SOY_FILE).parse().fileSet(),
+            ImmutableMap.of());
   }
 
   @Test

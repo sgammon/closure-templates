@@ -20,12 +20,12 @@ import static com.google.common.base.Preconditions.checkArgument;
 
 import com.google.template.soy.base.internal.IdGenerator;
 import com.google.template.soy.error.ErrorReporter;
+import com.google.template.soy.error.SoyErrorKind;
 import com.google.template.soy.soytree.SoyFileNode;
 import com.google.template.soy.soytree.TemplateNode;
-import com.google.template.soy.soytree.defn.HeaderParam;
 import com.google.template.soy.soytree.defn.TemplateParam;
-import com.google.template.soy.soytree.defn.TemplateParam.DeclLoc;
 import com.google.template.soy.types.MapType;
+import com.google.template.soy.types.SoyType.Kind;
 import com.google.template.soy.types.ast.GenericTypeNode;
 import com.google.template.soy.types.ast.NamedTypeNode;
 import com.google.template.soy.types.ast.RecordTypeNode;
@@ -43,6 +43,9 @@ import com.google.template.soy.types.ast.UnionTypeNode;
  */
 final class CheckDeclaredTypesPass extends CompilerFilePass {
 
+  private static final SoyErrorKind VE_BAD_DATA_TYPE =
+      SoyErrorKind.of("Illegal VE metadata type ''{0}''. The metadata must be a proto.");
+
   private final ErrorReporter errorReporter;
 
   CheckDeclaredTypesPass(ErrorReporter errorReporter) {
@@ -53,8 +56,12 @@ final class CheckDeclaredTypesPass extends CompilerFilePass {
   public void run(SoyFileNode file, IdGenerator nodeIdGen) {
     for (TemplateNode templateNode : file.getChildren()) {
       for (TemplateParam param : templateNode.getAllParams()) {
-        if (param.declLoc() == DeclLoc.HEADER) {
-          ((HeaderParam) param).getTypeNode().accept(new MapKeyTypeChecker());
+        TypeNode type = param.getTypeNode();
+        // Skip this if it's a param with a default value and an inferred type. In the case of an
+        // illegal map key type, the error will be reported on the map literal by
+        // ResolveExpressionTypesPass.
+        if (type != null) {
+          type.accept(new MapKeyTypeChecker());
         }
       }
     }
@@ -69,6 +76,10 @@ final class CheckDeclaredTypesPass extends CompilerFilePass {
 
     @Override
     public Void visit(GenericTypeNode node) {
+      if (!node.isTypeResolved()) {
+        // this means an error was already reported
+        return null;
+      }
       switch (node.getResolvedType().getKind()) {
         case MAP:
           checkArgument(node.arguments().size() == 2);
@@ -88,6 +99,16 @@ final class CheckDeclaredTypesPass extends CompilerFilePass {
           for (TypeNode child : node.arguments()) {
             child.accept(this);
           }
+          break;
+        case VE:
+          checkArgument(node.arguments().size() == 1);
+          TypeNode dataType = node.arguments().get(0);
+          if (dataType.getResolvedType().getKind() != Kind.PROTO
+              && dataType.getResolvedType().getKind() != Kind.NULL) {
+            errorReporter.report(
+                dataType.sourceLocation(), VE_BAD_DATA_TYPE, dataType.getResolvedType());
+          }
+          node.arguments().get(0).accept(this);
           break;
         default:
           throw new AssertionError("unexpected generic type: " + node.getResolvedType().getKind());

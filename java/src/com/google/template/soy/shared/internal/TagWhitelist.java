@@ -16,10 +16,10 @@
 
 package com.google.template.soy.shared.internal;
 
+import static com.google.common.collect.ImmutableSet.toImmutableSet;
+
 import com.google.common.base.Ascii;
-import com.google.common.base.Function;
 import com.google.common.base.Preconditions;
-import com.google.common.collect.FluentIterable;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Maps;
@@ -60,24 +60,8 @@ public final class TagWhitelist {
       return tag;
     }
 
-    public static final Function<String, OptionalSafeTag> FROM_TAG_NAME =
-        new Function<String, OptionalSafeTag>() {
-          @Override
-          public OptionalSafeTag apply(String tagName) {
-            return fromTagName(tagName);
-          }
-        };
-
-    public static final Function<OptionalSafeTag, String> TO_TAG_NAME =
-        new Function<OptionalSafeTag, String>() {
-          @Override
-          public String apply(OptionalSafeTag tag) {
-            return tag.getTagName();
-          }
-        };
-
     private static final ImmutableMap<String, OptionalSafeTag> OPTIONAL_SAFE_TAGS_BY_TAG_NAME =
-        Maps.uniqueIndex(EnumSet.allOf(OptionalSafeTag.class), TO_TAG_NAME);
+        Maps.uniqueIndex(EnumSet.allOf(OptionalSafeTag.class), OptionalSafeTag::getTagName);
   }
 
   /** Contains lower-case names of innocuous HTML elements. */
@@ -97,7 +81,7 @@ public final class TagWhitelist {
       return this;
     }
     ImmutableSet<String> optionalSafeTagNames =
-        FluentIterable.from(optionalSafeTags).transform(OptionalSafeTag.TO_TAG_NAME).toSet();
+        optionalSafeTags.stream().map(OptionalSafeTag::getTagName).collect(toImmutableSet());
     return new TagWhitelist(Sets.union(safeTagNames, optionalSafeTagNames));
   }
 
@@ -110,12 +94,12 @@ public final class TagWhitelist {
   private static final Pattern VALID_TAG_NAME =
       Pattern.compile("^[a-z][a-z0-9]*(?:-[a-z][a-z0-9]*)*\\z");
 
-  // Any changes to this must be reviewed by ise-team@.
+  // Any changes to this must be reviewed by go/ise-team-yaqs.
   /** A white-list of common formatting tags used by jslayout. */
   public static final TagWhitelist FORMATTING =
       new TagWhitelist(
           "b", "br", "em", "i", "s", "strong", "sub", "sup", "u"
-          // Any changes to this must be reviewed by ise-team@.
+          // Any changes to this must be reviewed by go/ise-team-yaqs.
           );
 
   public Set<String> asSet() {

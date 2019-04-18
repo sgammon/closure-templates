@@ -128,11 +128,9 @@ public final class SoyToPySrcCompiler extends AbstractSoyCompiler {
   }
 
   @Override
-  void compile(SoyFileSet.Builder sfsBuilder) throws IOException {
+  protected void compile(SoyFileSet.Builder sfsBuilder) throws IOException {
     // Disallow external call entirely in Python.
     sfsBuilder.setAllowExternalCalls(false);
-    // Require strict templates in Python.
-    sfsBuilder.setStrictAutoescapingRequired(true);
     SoyFileSet sfs = sfsBuilder.build();
     // Load the manifest if available.
     ImmutableMap<String, String> manifest = loadNamespaceManifest(namespaceManifestPaths);

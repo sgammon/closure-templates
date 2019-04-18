@@ -16,13 +16,15 @@
 package com.google.template.soy.soytree;
 
 import static com.google.common.base.Preconditions.checkNotNull;
+import static com.google.template.soy.soytree.SoyTreeUtils.getNodeAsHtmlTagNode;
 
 import com.google.common.collect.ImmutableList;
 import com.google.template.soy.base.SourceLocation;
-import com.google.template.soy.base.internal.Identifier;
 import com.google.template.soy.basetree.CopyState;
 import com.google.template.soy.error.ErrorReporter;
+import com.google.template.soy.error.SoyErrorKind;
 import com.google.template.soy.exprtree.ExprEquivalence;
+import com.google.template.soy.exprtree.ExprNode;
 import com.google.template.soy.exprtree.ExprRootNode;
 import com.google.template.soy.soytree.SoyNode.ExprHolderNode;
 import com.google.template.soy.soytree.SoyNode.MsgBlockNode;
@@ -36,6 +38,11 @@ import javax.annotation.Nullable;
  */
 public final class VeLogNode extends AbstractBlockCommandNode
     implements ExprHolderNode, StatementNode, MsgBlockNode {
+
+  private static final SoyErrorKind DATA_ATTRIBUTE_UNSUPPORTED =
+      SoyErrorKind.of(
+          "The ''data='' attribute is no longer supported, use the new data syntax instead: "
+              + "'''{velog ve_data(MyVe, $data)}'''.");
 
   /**
    * An equivalence key for comparing {@link VeLogNode} instances.
@@ -56,34 +63,29 @@ public final class VeLogNode extends AbstractBlockCommandNode
         return false;
       }
       SamenessKey otherKey = (SamenessKey) other;
-      return delegate.name.identifier().equals(otherKey.delegate.name.identifier())
-          && ExprEquivalence.get().equivalent(delegate.logonlyExpr, otherKey.delegate.logonlyExpr)
-          && ExprEquivalence.get().equivalent(delegate.dataExpr, otherKey.delegate.dataExpr);
+      return ExprEquivalence.get().equivalent(delegate.veDataExpr, otherKey.delegate.veDataExpr)
+          && ExprEquivalence.get().equivalent(delegate.logonlyExpr, otherKey.delegate.logonlyExpr);
     }
 
     @Override
     public int hashCode() {
       return Objects.hash(
-          delegate.name.identifier(),
-          ExprEquivalence.get().wrap(delegate.logonlyExpr),
-          ExprEquivalence.get().wrap(delegate.dataExpr));
+          ExprEquivalence.get().wrap(delegate.veDataExpr),
+          ExprEquivalence.get().wrap(delegate.logonlyExpr));
     }
   }
 
-  @Nullable private final ExprRootNode dataExpr;
+  private final ExprRootNode veDataExpr;
   @Nullable private final ExprRootNode logonlyExpr;
-  private final Identifier name;
-  @Nullable private Long loggingId;
 
   public VeLogNode(
       int id,
       SourceLocation location,
-      Identifier name,
+      ExprNode veDataExpr,
       List<CommandTagAttribute> attributes,
       ErrorReporter errorReporter) {
     super(id, location, "velog");
-    this.name = checkNotNull(name);
-    ExprRootNode configExpr = null;
+    this.veDataExpr = new ExprRootNode(checkNotNull(veDataExpr));
     ExprRootNode logonlyExpr = null;
     for (CommandTagAttribute attr : attributes) {
       switch (attr.getName().identifier()) {
@@ -91,7 +93,8 @@ public final class VeLogNode extends AbstractBlockCommandNode
           logonlyExpr = new ExprRootNode(attr.valueAsExpr(errorReporter));
           break;
         case "data":
-          configExpr = new ExprRootNode(attr.valueAsExpr(errorReporter));
+          // TODO(b/124762130): Remove this after 2019-08-26, when people are used to the new syntax
+          errorReporter.report(attr.getName().location(), DATA_ATTRIBUTE_UNSUPPORTED);
           break;
         default:
           errorReporter.report(
@@ -99,46 +102,29 @@ public final class VeLogNode extends AbstractBlockCommandNode
               CommandTagAttribute.UNSUPPORTED_ATTRIBUTE_KEY,
               attr.getName().identifier(),
               "velog",
-              ImmutableList.of("logonly", "data"));
+              ImmutableList.of("logonly"));
           break;
       }
     }
-    this.dataExpr = configExpr;
     this.logonlyExpr = logonlyExpr;
   }
 
   private VeLogNode(VeLogNode orig, CopyState copyState) {
     super(orig, copyState);
-    this.name = orig.name;
-    this.dataExpr = orig.dataExpr == null ? null : orig.dataExpr.copy(copyState);
+    this.veDataExpr = orig.veDataExpr.copy(copyState);
     this.logonlyExpr = orig.logonlyExpr == null ? null : orig.logonlyExpr.copy(copyState);
-    this.loggingId = orig.loggingId;
   }
 
   SamenessKey getSamenessKey() {
     return new SamenessKey(this);
   }
 
-  /** Returns the name associated with this log statement. */
-  public Identifier getName() {
-    return name;
+  /** Returns a reference to the VE expression. */
+  public ExprRootNode getVeDataExpression() {
+    return veDataExpr;
   }
 
-  /**
-   * Returns the logging id associated with this log statement, or {@code null} if it doesn't exist.
-   */
-  @Nullable
-  public Long getLoggingId() {
-    return loggingId;
-  }
-
-  /** Returns a reference to the config expression, if there is one. */
-  @Nullable
-  public ExprRootNode getConfigExpression() {
-    return dataExpr;
-  }
-
-  /** Returns a reference to the config expression, if there is one. */
+  /** Returns a reference to the logonly expression, if there is one. */
   @Nullable
   public ExprRootNode getLogonlyExpression() {
     return logonlyExpr;
@@ -153,7 +139,7 @@ public final class VeLogNode extends AbstractBlockCommandNode
   @Nullable
   public HtmlOpenTagNode getOpenTagNode() {
     if (numChildren() > 0) {
-      return (HtmlOpenTagNode) getVeLogChildNodeAsHtmlTagNode(getChild(0), /*openTag=*/ true);
+      return (HtmlOpenTagNode) getNodeAsHtmlTagNode(getChild(0), /*openTag=*/ true);
     }
     return null;
   }
@@ -163,35 +149,14 @@ public final class VeLogNode extends AbstractBlockCommandNode
   public HtmlCloseTagNode getCloseTagNode() {
     if (numChildren() > 1) {
       return (HtmlCloseTagNode)
-          getVeLogChildNodeAsHtmlTagNode(getChild(numChildren() - 1), /*openTag=*/ false);
-    }
-    return null;
-  }
-
-  private static HtmlTagNode getVeLogChildNodeAsHtmlTagNode(SoyNode node, boolean openTag) {
-    SoyNode.Kind tagKind =
-        openTag ? SoyNode.Kind.HTML_OPEN_TAG_NODE : SoyNode.Kind.HTML_CLOSE_TAG_NODE;
-    if (node.getKind() == tagKind) {
-      return (HtmlTagNode) node;
-    }
-    // In a msg tag it will be a placeholder, wrapping a MsgHtmlTagNode wrapping the HtmlTagNode.
-    if (node.getKind() == Kind.MSG_PLACEHOLDER_NODE) {
-      MsgPlaceholderNode placeholderNode = (MsgPlaceholderNode) node;
-      if (placeholderNode.numChildren() == 1
-          && placeholderNode.getChild(0).getKind() == Kind.MSG_HTML_TAG_NODE) {
-        MsgHtmlTagNode msgHtmlTagNode = (MsgHtmlTagNode) placeholderNode.getChild(0);
-        if (msgHtmlTagNode.numChildren() == 1 && msgHtmlTagNode.getChild(0).getKind() == tagKind) {
-          return (HtmlTagNode) msgHtmlTagNode.getChild(0);
-        }
-      }
+          getNodeAsHtmlTagNode(getChild(numChildren() - 1), /*openTag=*/ false);
     }
     return null;
   }
 
   @Override
   public String getCommandText() {
-    return name.identifier()
-        + (dataExpr != null ? " data=\"" + dataExpr.toSourceString() + "\"" : "")
+    return veDataExpr.toSourceString()
         + (logonlyExpr != null ? " logonly=\"" + logonlyExpr.toSourceString() + "\"" : "");
   }
 
@@ -208,9 +173,7 @@ public final class VeLogNode extends AbstractBlockCommandNode
   @Override
   public ImmutableList<ExprRootNode> getExprList() {
     ImmutableList.Builder<ExprRootNode> builder = ImmutableList.builder();
-    if (dataExpr != null) {
-      builder.add(dataExpr);
-    }
+    builder.add(veDataExpr);
     if (logonlyExpr != null) {
       builder.add(logonlyExpr);
     }
@@ -224,9 +187,5 @@ public final class VeLogNode extends AbstractBlockCommandNode
     appendSourceStringForChildren(sb);
     sb.append("{/velog}");
     return sb.toString();
-  }
-
-  public void setLoggingId(long id) {
-    this.loggingId = id;
   }
 }

@@ -16,7 +16,6 @@
 
 package com.google.template.soy.jssrc.internal;
 
-import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Preconditions;
 import com.google.template.soy.base.SourceLocation;
 import com.google.template.soy.error.ErrorReporter;
@@ -43,13 +42,13 @@ final class V1JsExprTranslator {
 
   private static final SoyErrorKind UNSUPPORTED_OPERATOR =
       SoyErrorKind.of(
-          "''v1Expression'' no longer supports the ''and'', ''or'' or ''and'' operators. "
+          "''v1Expression'' no longer supports the ''and'', ''or'' or ''not'' operators. "
               + "Move the operator outside of the ''v1Expression'' or migrate to a v2 expression "
               + "to access this functionality.");
 
   /** Regex for a template variable or data reference. */
-  // 2 capturing groups: first part (excluding '$'), rest
-  // Example:  $boo.foo.goo  ==>  group(1) == "boo",  group(2) == ".foo.goo"
+  // 1 capturing group: first part (excluding '$')
+  // Example:  $boo.foo.goo  ==>  group(1) == "boo"
   private static final String VAR_RE = "\\$([a-zA-Z_][a-zA-Z0-9_]*)";
 
   /** Regex pattern for a template variable or data reference. */
@@ -85,7 +84,6 @@ final class V1JsExprTranslator {
    * @param errorReporter For reporting syntax errors.
    * @return The resulting expression code after the necessary substitutions.
    */
-  @VisibleForTesting
   static JsExpr translateToJsExpr(
       String soyExpr,
       SourceLocation sourceLocation,

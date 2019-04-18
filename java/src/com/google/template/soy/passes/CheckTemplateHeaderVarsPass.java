@@ -26,10 +26,11 @@ import com.google.template.soy.error.SoyErrorKind;
 import com.google.template.soy.error.SoyErrorKind.StyleAllowance;
 import com.google.template.soy.error.SoyErrors;
 import com.google.template.soy.exprtree.VarRefNode;
-import com.google.template.soy.passes.FindIndirectParamsVisitor.IndirectParamsInfo;
+import com.google.template.soy.passes.IndirectParamsCalculator.IndirectParamsInfo;
 import com.google.template.soy.soytree.SoyFileNode;
 import com.google.template.soy.soytree.SoyTreeUtils;
 import com.google.template.soy.soytree.TemplateBasicNode;
+import com.google.template.soy.soytree.TemplateElementNode;
 import com.google.template.soy.soytree.TemplateNode;
 import com.google.template.soy.soytree.TemplateRegistry;
 import com.google.template.soy.soytree.defn.TemplateHeaderVarDefn;
@@ -63,23 +64,20 @@ final class CheckTemplateHeaderVarsPass extends CompilerFileSetPass {
   }
 
   @Override
-  public void run(
+  public Result run(
       ImmutableList<SoyFileNode> sourceFiles, IdGenerator idGenerator, TemplateRegistry registry) {
     for (SoyFileNode fileNode : sourceFiles) {
       for (TemplateNode templateNode : fileNode.getChildren()) {
         checkTemplate(templateNode, registry);
       }
     }
+    return Result.CONTINUE;
   }
 
   // -----------------------------------------------------------------------------------------------
   // Implementations for specific nodes.
 
   private void checkTemplate(TemplateNode node, TemplateRegistry templateRegistry) {
-    if (node.isDeprecatedV1()) {
-      return;
-    }
-
     ListMultimap<String, SourceLocation> dataKeys = ArrayListMultimap.create();
 
     for (VarRefNode varRefNode : SoyTreeUtils.getAllNodesOfType(node, VarRefNode.class)) {
@@ -88,7 +86,9 @@ final class CheckTemplateHeaderVarsPass extends CompilerFileSetPass {
       }
     }
 
-    IndirectParamsInfo ipi = new FindIndirectParamsVisitor(templateRegistry).exec(node);
+    IndirectParamsInfo ipi =
+        new IndirectParamsCalculator(templateRegistry)
+            .calculateIndirectParams(templateRegistry.getMetadata(node));
 
     Set<String> allHeaderVarNames = new HashSet<>();
     List<TemplateHeaderVarDefn> unusedParams = new ArrayList<>();
@@ -112,16 +112,19 @@ final class CheckTemplateHeaderVarsPass extends CompilerFileSetPass {
       }
     }
 
-    // Process @state header variables.
     List<TemplateHeaderVarDefn> unusedStateVars = new ArrayList<>();
-    for (TemplateStateVar stateVar : node.getStateVars()) {
-      allHeaderVarNames.add(stateVar.name());
-      if (dataKeys.containsKey(stateVar.name())) {
-        // Good: declared and referenced in the template.
-        dataKeys.removeAll(stateVar.name());
-      } else {
-        // Bad: declared in the header, but not used.
-        unusedStateVars.add(stateVar);
+    // Process @state header variables.
+    if (node instanceof TemplateElementNode) {
+      TemplateElementNode el = (TemplateElementNode) node;
+      for (TemplateStateVar stateVar : el.getStateVars()) {
+        allHeaderVarNames.add(stateVar.name());
+        if (dataKeys.containsKey(stateVar.name())) {
+          // Good: declared and referenced in the template.
+          dataKeys.removeAll(stateVar.name());
+        } else {
+          // Bad: declared in the header, but not used.
+          unusedStateVars.add(stateVar);
+        }
       }
     }
     // At this point, the only keys left in dataKeys are undeclared.
@@ -136,6 +139,8 @@ final class CheckTemplateHeaderVarsPass extends CompilerFileSetPass {
     // of the same delegate may need to use those params.
     if (node instanceof TemplateBasicNode) {
       reportUnusedHeaderVars(errorReporter, unusedParams, UNUSED_PARAM);
+    }
+    if (node instanceof TemplateElementNode) {
       reportUnusedHeaderVars(errorReporter, unusedStateVars, UNUSED_STATE);
     }
   }

@@ -44,8 +44,6 @@ public final class MsgHtmlTagNode extends AbstractBlockNode implements MsgPlaceh
       SoyErrorKind.of("HTML tags within within ''msg'' blocks must use constant tag names.");
   private static final SoyErrorKind INVALID_ATTRIBUTE =
       SoyErrorKind.of("''{0}'' attribute is not a constant.");
-  private static final SoyErrorKind MULTIPLE_ATTRIBUTES =
-      SoyErrorKind.of("Multiple ''{0}'' attributes in HTML tag.");
 
   /**
    * Creates a {@link MsgHtmlTagNode} from a {@link HtmlTagNode}.
@@ -157,14 +155,6 @@ public final class MsgHtmlTagNode extends AbstractBlockNode implements MsgPlaceh
     RawTextNode value = getAttributeValue(attribute, name, errorReporter);
     // Remove it, we don't actually want to render it
     tagNode.removeChild(attribute);
-    // see if there is more than one.
-    attribute = tagNode.getDirectAttributeNamed(name);
-    // TODO(lukes): we should probably have a check that no tag contains multiple copies of an
-    // attribute since it is disallowed:
-    // https://html.spec.whatwg.org/multipage/syntax.html#attributes-2
-    if (attribute != null) {
-      errorReporter.report(attribute.getSourceLocation(), MULTIPLE_ATTRIBUTES, name);
-    }
     return value;
   }
 
@@ -310,8 +300,7 @@ public final class MsgHtmlTagNode extends AbstractBlockNode implements MsgPlaceh
       baseLcTagName = lcTagName;
     }
     String basePlaceholderName =
-        LC_TAG_NAME_TO_PLACEHOLDER_NAME_MAP.containsKey(baseLcTagName) ?
-            LC_TAG_NAME_TO_PLACEHOLDER_NAME_MAP.get(baseLcTagName) : baseLcTagName;
+        LC_TAG_NAME_TO_PLACEHOLDER_NAME_MAP.getOrDefault(baseLcTagName, baseLcTagName);
     if (isEndTag) {
       basePlaceholderName = "end_" + basePlaceholderName;
     } else if (!isSelfEnding) {

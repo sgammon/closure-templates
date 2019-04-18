@@ -18,11 +18,8 @@ package com.google.template.soy.basicfunctions;
 
 import static com.google.common.truth.Truth.assertThat;
 
-import com.google.common.collect.ImmutableList;
 import com.google.template.soy.data.restricted.FloatData;
-import com.google.template.soy.jssrc.restricted.JsExpr;
 import com.google.template.soy.plugin.java.restricted.testing.SoyJavaSourceFunctionTester;
-import com.google.template.soy.pysrc.restricted.PyExpr;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
@@ -47,21 +44,5 @@ public class FloorFunctionTest {
 
     result = factory.callFunction(FloatData.forValue(2.5D));
     assertThat(result).isEqualTo(2L);
-  }
-
-  @Test
-  public void testComputeForJsSrc() {
-    FloorFunction floorFunction = new FloorFunction();
-    JsExpr expr = new JsExpr("JS_CODE", Integer.MAX_VALUE);
-    assertThat(floorFunction.computeForJsSrc(ImmutableList.of(expr)))
-        .isEqualTo(new JsExpr("Math.floor(JS_CODE)", Integer.MAX_VALUE));
-  }
-
-  @Test
-  public void testComputeForPySrc() {
-    FloorFunction floorFunction = new FloorFunction();
-    PyExpr expr = new PyExpr("number", Integer.MAX_VALUE);
-    assertThat(floorFunction.computeForPySrc(ImmutableList.of(expr)))
-        .isEqualTo(new PyExpr("int(math.floor(number))", Integer.MAX_VALUE));
   }
 }

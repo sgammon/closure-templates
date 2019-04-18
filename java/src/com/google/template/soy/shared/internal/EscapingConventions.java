@@ -228,7 +228,7 @@ public final class EscapingConventions {
      * @return {@code null} if there is no such function.
      */
     public List<String> getLangFunctionNames(EscapingLanguage language) {
-      return ImmutableList.<String>of();
+      return ImmutableList.of();
     }
 
     /** Returns an innocuous string in this context that can be used when filtering. */
@@ -492,7 +492,7 @@ public final class EscapingConventions {
     @Override
     public List<String> getLangFunctionNames(EscapingLanguage language) {
       if (language == EscapingLanguage.JAVASCRIPT) {
-        return ImmutableList.<String>of("goog.string.htmlEscape");
+        return ImmutableList.of("goog.string.htmlEscape");
       }
       return super.getLangFunctionNames(language);
     }
@@ -546,7 +546,7 @@ public final class EscapingConventions {
   }
 
   /**
-   * Implements the {@code |escapeHtmlNoSpace} directive which allows arbitrary content to be
+   * Implements the {@code |escapeHtmlNospace} directive which allows arbitrary content to be
    * included in the value of an unquoted HTML attribute.
    */
   public static final class EscapeHtmlNospace extends CrossLanguageStringXform {
@@ -804,19 +804,17 @@ public final class EscapingConventions {
             // #RULE_.234_-_CSS_Escape_Before_Inserting_Untrusted_Data_into_HTML_Style_Property_Values
             // for an explanation of why expression and moz-binding are bad.
             "^(?!-*(?:expression|(?:moz-)?binding))"
-                + // Should not start with spaces. Since we allow spaces between sub-values,
-                // we need this condition to disable space-only values.
-                "(?!\\s+)(?:"
+                + "(?:(?:"
                 + // A latin class name or ID, CSS identifier, hex color or unicode range.
                 "[.#]?-?(?:[_a-z0-9-]+)(?:-[_a-z0-9-]+)*-?|"
                 + // A non-hex color
                 "(?:rgb|hsl)a?\\([0-9.%, ]+\\)|"
-                + // A quantity
-                "-?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)(?:[a-z]{1,2}|%)?|"
+                + // A quantity, with an optional unit
+                "-?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)(?:[a-z]{1,4}|%)?|"
                 + // The special value !important.
-                "!important|"
+                "!important)"
                 + // Spaces.
-                "\\s+"
+                "(?:\\s+|\\z)"
                 + ")*\\z",
             Pattern.CASE_INSENSITIVE);
 
@@ -829,7 +827,7 @@ public final class EscapingConventions {
 
     @Override
     protected ImmutableList<Escape> defineEscapes() {
-      return ImmutableList.<Escape>of();
+      return ImmutableList.of();
     }
   }
 
@@ -911,7 +909,7 @@ public final class EscapingConventions {
       // Disallows any protocol that is not in a whitelist.
       // The below passes if there is
       // (1) Either a protocol in a whitelist (http, https, mailto).  This could be expanded but
-      //     talk to your friendly local ise-team@ first.
+      //     talk to your friendly local go/ise-team-yaqs first.
       // (2) or no protocol.  A protocol must be followed by a colon.  The below allows that by
       //     allowing colons only after one of the characters [/?#].
       //     A colon after a hash (#) must be in the fragment.
@@ -1035,7 +1033,7 @@ public final class EscapingConventions {
     protected ImmutableList<Escape> defineEscapes() {
       // No normalization or escaping necessary -- the filter is limited to a strict subset that
       // doesn't involve html stop-chars.
-      return ImmutableList.<Escape>of();
+      return ImmutableList.of();
     }
 
     @Override
@@ -1067,7 +1065,7 @@ public final class EscapingConventions {
 
     @Override
     protected ImmutableList<Escape> defineEscapes() {
-      return ImmutableList.<Escape>of();
+      return ImmutableList.of();
     }
 
     @Override
@@ -1100,7 +1098,7 @@ public final class EscapingConventions {
 
     @Override
     protected ImmutableList<Escape> defineEscapes() {
-      return ImmutableList.<Escape>of();
+      return ImmutableList.of();
     }
 
     @Override
@@ -1130,7 +1128,7 @@ public final class EscapingConventions {
 
     @Override
     protected ImmutableList<Escape> defineEscapes() {
-      return ImmutableList.<Escape>of();
+      return ImmutableList.of();
     }
 
     @Override
@@ -1180,9 +1178,9 @@ public final class EscapingConventions {
     @Override
     public List<String> getLangFunctionNames(EscapingLanguage language) {
       if (language == EscapingLanguage.JAVASCRIPT) {
-        return ImmutableList.<String>of("goog.string.urlEncode", "encodeURIComponent");
+        return ImmutableList.of("goog.string.urlEncode", "encodeURIComponent");
       } else if (language == EscapingLanguage.PYTHON) {
-        return ImmutableList.<String>of("urllib.quote");
+        return ImmutableList.of("quote");
       }
       return super.getLangFunctionNames(language);
     }
@@ -1203,8 +1201,8 @@ public final class EscapingConventions {
                   // Disallow on* and src* attribute names.
                   + "(?!on|src|"
                   // Disallow specific other attribute names.
-                  + "(?:style|action|archive|background|cite|classid|codebase|data|dsync|href"
-                  + "|longdesc|usemap)\\s*$)"
+                  + "(?:action|archive|background|cite|classid|codebase|content|data|dsync|href"
+                  + "|http-equiv|longdesc|style|usemap)\\s*$)"
                   + "(?:"
                   // Must match letters
                   + "[a-z0-9_$:-]*"
@@ -1216,7 +1214,7 @@ public final class EscapingConventions {
 
     @Override
     protected ImmutableList<Escape> defineEscapes() {
-      return ImmutableList.<Escape>of();
+      return ImmutableList.of();
     }
   }
 
@@ -1241,7 +1239,7 @@ public final class EscapingConventions {
 
     @Override
     protected ImmutableList<Escape> defineEscapes() {
-      return ImmutableList.<Escape>of();
+      return ImmutableList.of();
     }
   }
 

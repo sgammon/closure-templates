@@ -16,7 +16,6 @@
 
 package com.google.template.soy.jbcsrc;
 
-import static com.google.common.base.Predicates.notNull;
 import static com.google.template.soy.jbcsrc.StandardNames.IJ_FIELD;
 import static com.google.template.soy.jbcsrc.StandardNames.PARAMS_FIELD;
 import static com.google.template.soy.jbcsrc.StandardNames.RENDER_CONTEXT_FIELD;
@@ -71,11 +70,13 @@ import com.google.template.soy.soytree.SoyNode;
 import com.google.template.soy.soytree.SoyNode.RenderUnitNode;
 import com.google.template.soy.soytree.defn.LocalVar;
 import com.google.template.soy.soytree.defn.TemplateParam;
+import com.google.template.soy.soytree.defn.TemplateStateVar;
 import com.google.template.soy.types.SoyTypeRegistry;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import org.objectweb.asm.Label;
 import org.objectweb.asm.Opcodes;
 import org.objectweb.asm.Type;
@@ -339,7 +340,7 @@ final class LazyClosureCompiler {
             }
           };
       variableSet.defineStaticFields(writer);
-      Statement fieldInitializers = variableSet.defineFields(writer);
+      variableSet.defineFields(writer);
       Expression constructExpr =
           generateConstructor(
               new Statement() {
@@ -349,7 +350,6 @@ final class LazyClosureCompiler {
                   adapter.invokeConstructor(baseClass.type(), NULLARY_INIT);
                 }
               },
-              fieldInitializers,
               lookup.getCapturedFields());
 
       doResolveImpl.writeMethod(Opcodes.ACC_PROTECTED, DO_RESOLVE, writer);
@@ -405,7 +405,7 @@ final class LazyClosureCompiler {
       SanitizedContentKind kind = renderUnit.getContentKind();
       final Expression contentKind = constantSanitizedContentKindAsContentKind(kind);
       variableSet.defineStaticFields(writer);
-      Statement fieldInitializers = variableSet.defineFields(writer);
+      variableSet.defineFields(writer);
       Statement superClassContstructor =
           new Statement() {
             @Override
@@ -416,8 +416,7 @@ final class LazyClosureCompiler {
             }
           };
       Expression constructExpr =
-          generateConstructor(
-              superClassContstructor, fieldInitializers, lookup.getCapturedFields());
+          generateConstructor(superClassContstructor, lookup.getCapturedFields());
 
       fullMethodBody.writeMethod(Opcodes.ACC_PROTECTED, DO_RENDER, writer);
       return constructExpr;
@@ -431,7 +430,6 @@ final class LazyClosureCompiler {
      */
     Expression generateConstructor(
         final Statement superClassConstructorInvocation,
-        final Statement fieldInitializers,
         Iterable<ParentCapture> captures) {
       final Label start = new Label();
       final Label end = new Label();
@@ -459,8 +457,6 @@ final class LazyClosureCompiler {
               cb.mark(start);
               // call super()
               superClassConstructorInvocation.gen(cb);
-              // init fields
-              fieldInitializers.gen(cb);
               // assign params to fields
               for (Statement assignment : assignments) {
                 assignment.gen(cb);
@@ -484,8 +480,8 @@ final class LazyClosureCompiler {
    * Represents a field captured from our parent. To capture a value from our parent we grab the
    * expression that produces that value and then generate a field in the child with the same type.
    *
-   * <p>{@link CompilationUnit#generateConstructor(Iterable)} generates the code to propagate the
-   * captured values from the parent to the child, and from the constructor to the generated fields.
+   * <p>{@link CompilationUnit#generateConstructor} generates the code to propagate the captured
+   * values from the parent to the child, and from the constructor to the generated fields.
    */
   @AutoValue
   abstract static class ParentCapture {
@@ -561,6 +557,13 @@ final class LazyClosureCompiler {
     }
 
     @Override
+    public SoyExpression getState(TemplateStateVar stateVar) {
+      // We can always just access the parent directly instead of capturing because these are simple
+      // expressions or static field references.
+      return parentParameterLookup.getState(stateVar);
+    }
+
+    @Override
     public Expression getLocal(LocalVar local) {
       if (isDescendantOf(local.declaringNode(), params.node)) {
         // in this case, we just delegate to VariableSet
@@ -596,7 +599,8 @@ final class LazyClosureCompiler {
 
     Iterable<ParentCapture> getCapturedFields() {
       return Iterables.concat(
-          Iterables.filter(asList(paramsCapture, ijCapture, renderContextCapture), notNull()),
+          Iterables.filter(
+              asList(paramsCapture, ijCapture, renderContextCapture), Objects::nonNull),
           paramFields.values(),
           localFields.values(),
           syntheticFields.values());
@@ -620,11 +624,6 @@ final class LazyClosureCompiler {
         @Override
         public Expression getBidiGlobalDir() {
           return getDelegate().getBidiGlobalDir();
-        }
-
-        @Override
-        public Expression getDebugSoyTemplateInfo() {
-          return getDelegate().getDebugSoyTemplateInfo();
         }
 
         @Override

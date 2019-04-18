@@ -103,19 +103,19 @@ public final class TemplateParserTest {
     TemplateSubject.assertThatTemplateContent("a {} b")
         .causesError(
             "parse error at '}': expected null, true, false, number, string, -, not, [, (, "
-                + "identifier, $ij, or variable");
+                + "identifier, or variable");
     TemplateSubject.assertThatTemplateContent("{msg desc=\"\"}a {} b{/msg}")
         .causesError(
             "parse error at '}': expected null, true, false, number, string, -, not, [, (, "
-                + "identifier, $ij, or variable");
+                + "identifier, or variable");
     TemplateSubject.assertThatTemplateContent("{msg desc=\"\"}<a> {} </a>{/msg}")
         .causesError(
             "parse error at '}': expected null, true, false, number, string, -, not, [, (, "
-                + "identifier, $ij, or variable");
+                + "identifier, or variable");
     TemplateSubject.assertThatTemplateContent("{msg desc=\"\"}<a href=\"{}\" />{/msg}")
         .causesError(
             "parse error at '}': expected null, true, false, number, string, -, not, [, (, "
-                + "identifier, $ij, or variable");
+                + "identifier, or variable");
 
     TemplateSubject.assertThatTemplateContent("{/blah}").causesError("Unexpected closing tag.");
 
@@ -125,11 +125,11 @@ public final class TemplateParserTest {
     TemplateSubject.assertThatTemplateContent("{@blah}")
         .causesError(
             "parse error at '@': expected null, true, false, number, string, -, not, "
-                + "[, (, identifier, $ij, or variable");
+                + "[, (, identifier, or variable");
     TemplateSubject.assertThatTemplateContent("{sp ace}")
-        .causesError("parse error at '}': expected attribute value");
+        .causesError("parse error at '}': expected =");
     TemplateSubject.assertThatTemplateContent("{literal a=b}")
-        .causesError("parse error at '=': expected attribute value");
+        .causesError("parse error at 'b': expected \\\" or \\'");
 
     assertValidTemplate("{@param blah : ?}\n{if $blah == 'phname = \"foo\"'}{/if}");
     assertInvalidTemplate("{blah phname=\"\"}");
@@ -410,8 +410,7 @@ public final class TemplateParserTest {
             + "  Archive\n"
             + "{/msg}");
     assertValidTemplate(
-        "{@param aaa : ?}{@param bbb : ?}{@param ddd : ?}\n"
-            + "{$aaa + 1}{print $bbb.ccc[$ddd] |noAutoescape}");
+        "{@param aaa : ?}{@param bbb : ?}{@param ddd : ?}\n" + "{$aaa + 1}{print $bbb.ccc[$ddd]}");
     assertValidTemplate("{css('selected-option')}{css('CSS_SELECTED_OPTION')}");
     assertValidTemplate("{xid('selected-option')}{xid('SELECTED_OPTION_ID')}");
     assertValidTemplate(
@@ -465,7 +464,7 @@ public final class TemplateParserTest {
             + "{msg meaning=\"boo\" desc=\"blah\"}\n"
             + "  {$boo phname=\"foo\"} is a \n"
             + "  <a phname=\"begin_link\" href=\"{$fooUrl}\">\n"
-            + "    {$foo |noAutoescape phname=\"booFoo\" }\n"
+            + "    {$foo phname=\"booFoo\" }\n"
             + "  </a phname=\"END_LINK\" >.\n"
             + "  {call .aaa data=\"all\"\nphname=\"AaaBbb\"/}\n"
             + "  {call .aaa phname=\"AaaBbb\" data=\"all\"}{/call}\n"
@@ -513,7 +512,7 @@ public final class TemplateParserTest {
         .causesError(
             "parse error at '{fallbackmsg ': expected text, {literal}, {call, {delcall, {msg, "
                 + "{/msg}, {if, {let, {for, {plural, {select, {switch, {log}, {debugger}, {print, "
-                + "{, or whitespace");
+                + "{, {key, or whitespace");
     assertInvalidTemplate("{print $boo /}");
     assertInvalidTemplate("{if true}aaa{else/}bbb{/if}");
     assertInvalidTemplate("{call .aaa.bbb /}");
@@ -926,8 +925,8 @@ public final class TemplateParserTest {
     String templateBody =
         "{@param boo : ?}{@param goo : ?}\n"
             + "  {$boo.foo}{$boo.foo}\n"
-            + "  {$goo + 1 |noAutoescape}\n"
-            + "  {print 'blah    blahblahblah' |escapeHtml|insertWordBreaks:8}\n";
+            + "  {$goo + 1}\n"
+            + "  {'blah    blahblahblah' |insertWordBreaks:8}\n";
 
     List<StandaloneNode> nodes = parseTemplateContent(templateBody, FAIL).getChildren();
     assertEquals(4, nodes.size());
@@ -945,20 +944,16 @@ public final class TemplateParserTest {
 
     PrintNode pn2 = (PrintNode) nodes.get(2);
     assertEquals("$goo + 1", pn2.getExpr().toSourceString());
-    assertEquals(1, pn2.getChildren().size());
-    PrintDirectiveNode pn2d0 = pn2.getChild(0);
-    assertEquals("|noAutoescape", pn2d0.getName());
+    assertEquals(0, pn2.getChildren().size());
     assertEquals("XXX", pn2.genBasePhName());
     assertTrue(pn2.getExpr().getRoot() instanceof PlusOpNode);
 
     PrintNode pn3 = (PrintNode) nodes.get(3);
     assertEquals("'blah    blahblahblah'", pn3.getExpr().toSourceString());
-    assertEquals(2, pn3.getChildren().size());
+    assertEquals(1, pn3.getChildren().size());
     PrintDirectiveNode pn3d0 = pn3.getChild(0);
-    assertEquals("|escapeHtml", pn3d0.getName());
-    PrintDirectiveNode pn3d1 = pn3.getChild(1);
-    assertEquals("|insertWordBreaks", pn3d1.getName());
-    assertEquals(8, ((IntegerNode) pn3d1.getArgs().get(0).getRoot()).getValue());
+    assertEquals("|insertWordBreaks", pn3d0.getName());
+    assertEquals(8, ((IntegerNode) pn3d0.getArgs().get(0).getRoot()).getValue());
     assertEquals("XXX", pn3.genBasePhName());
     assertTrue(pn3.getExpr().getRoot() instanceof StringNode);
 
@@ -1238,7 +1233,7 @@ public final class TemplateParserTest {
 
     // Test error case.
     TemplateSubject.assertThatTemplateContent("{let $alpha /}{/let}")
-        .causesError("parse error at '/}': expected }, ':', or identifier")
+        .causesError("parse error at '/}': expected }, identifier, or ':'")
         .at(1, 13);
 
     // Test error case.
@@ -1902,7 +1897,7 @@ public final class TemplateParserTest {
    * @return The decl infos and parse tree nodes created.
    */
   private static TemplateNode parseTemplateContent(String input, ErrorReporter errorReporter) {
-    String soyFile = SharedTestUtils.buildTestSoyFileContent(ImmutableList.<String>of(), input);
+    String soyFile = SharedTestUtils.buildTestSoyFileContent(ImmutableList.of(), input);
 
     SoyFileSetNode fileSet =
         SoyFileSetParserBuilder.forFileContents(soyFile)

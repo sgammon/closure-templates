@@ -37,7 +37,7 @@ public abstract class ErrorReporter {
 
   /** Creates a new ErrorReporter suitable for asserting on messages in tests. */
   public static ErrorReporter createForTest() {
-    return new ErrorReporterImpl(ImmutableMap.<String, SoyFileSupplier>of());
+    return new ErrorReporterImpl(ImmutableMap.of());
   }
 
   /**
@@ -68,6 +68,9 @@ public abstract class ErrorReporter {
    * stop temporary backsliding.
    */
   public abstract void warn(SourceLocation sourceLocation, SoyErrorKind error, Object... args);
+
+  /** Copies the errors from one error reprorter to another one. */
+  public abstract void copyTo(ErrorReporter other);
 
   /**
    * Returns an opaque token (the checkpoint) that callers can later pass back into {@link

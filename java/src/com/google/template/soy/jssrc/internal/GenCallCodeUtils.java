@@ -47,7 +47,11 @@ import com.google.template.soy.soytree.CallNode;
 import com.google.template.soy.soytree.CallParamContentNode;
 import com.google.template.soy.soytree.CallParamNode;
 import com.google.template.soy.soytree.CallParamValueNode;
+import com.google.template.soy.soytree.TemplateNode;
+import com.google.template.soy.soytree.defn.TemplateParam;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Generates JS code for {call}s and {delcall}s.
@@ -119,21 +123,28 @@ public class GenCallCodeUtils {
       CallNode callNode,
       TemplateAliases templateAliases,
       TranslationContext translationContext,
-      ErrorReporter errorReporter) {
+      ErrorReporter errorReporter,
+      TranslateExprNodeVisitor exprTranslator) {
 
     // Build the JS CodeChunk for the callee's name.
-    Expression callee = genCallee(callNode, templateAliases, translationContext, errorReporter);
+    Expression callee = genCallee(callNode, templateAliases, exprTranslator);
 
     // Generate the data object to pass to callee
     Expression objToPass =
-        genObjToPass(callNode, templateAliases, translationContext, errorReporter);
+        genObjToPass(callNode, templateAliases, translationContext, errorReporter, exprTranslator);
 
-    // Generate the main call expression.
-    Expression call = callee.call(objToPass, JsRuntime.OPT_IJ_DATA);
+    Expression call = genMainCall(callee, objToPass, callNode);
     if (callNode.getEscapingDirectives().isEmpty()) {
       return call;
     }
+    return applyEscapingDirectives(call, callNode);
+  }
 
+  protected Expression genMainCall(Expression callee, Expression objToPass, CallNode call) {
+    return callee.call(objToPass, JsRuntime.OPT_IJ_DATA);
+  }
+
+  public static Expression applyEscapingDirectives(Expression call, CallNode callNode) {
     // Apply escaping directives as necessary.
     //
     // The print directive system continues to use JsExpr, as it is a publicly available API and
@@ -148,8 +159,7 @@ public class GenCallCodeUtils {
           "Contextual autoescaping produced a bogus directive: %s",
           directive.getName());
       callResult =
-          ((SoyJsSrcPrintDirective) directive)
-              .applyForJsSrc(callResult, ImmutableList.<JsExpr>of());
+          ((SoyJsSrcPrintDirective) directive).applyForJsSrc(callResult, ImmutableList.of());
       if (directive instanceof SoyLibraryAssistedJsSrcPrintDirective) {
         for (String name :
             ((SoyLibraryAssistedJsSrcPrintDirective) directive).getRequiredJsLibNames()) {
@@ -169,10 +179,7 @@ public class GenCallCodeUtils {
    * @return The JS expression for the template to call
    */
   public Expression genCallee(
-      CallNode callNode,
-      TemplateAliases templateAliases,
-      TranslationContext translationContext,
-      ErrorReporter errorReporter) {
+      CallNode callNode, TemplateAliases templateAliases, TranslateExprNodeVisitor exprTranslator) {
     // Build the JS CodeChunk for the callee's name.
     Expression callee;
     if (callNode instanceof CallBasicNode) {
@@ -197,8 +204,7 @@ public class GenCallCodeUtils {
         variant = LITERAL_EMPTY_STRING;
       } else {
         // Case 2b: Delegate call with variant expression.
-        variant =
-            new TranslateExprNodeVisitor(translationContext, errorReporter).exec(variantSoyExpr);
+        variant = exprTranslator.exec(variantSoyExpr);
       }
 
       callee =
@@ -256,67 +262,90 @@ public class GenCallCodeUtils {
       CallNode callNode,
       TemplateAliases templateAliases,
       TranslationContext translationContext,
-      ErrorReporter errorReporter) {
+      ErrorReporter errorReporter,
+      TranslateExprNodeVisitor exprTranslator) {
 
     // ------ Generate the expression for the original data to pass ------
     Expression dataToPass;
     if (callNode.isPassingAllData()) {
       dataToPass = JsRuntime.OPT_DATA;
     } else if (callNode.isPassingData()) {
-      dataToPass =
-          new TranslateExprNodeVisitor(translationContext, errorReporter)
-              .exec(callNode.getDataExpr());
+      dataToPass = exprTranslator.exec(callNode.getDataExpr());
+    } else if (callNode.numChildren() == 0) {
+      // If we're passing neither children nor indirect data, we can immediately return null.
+      return LITERAL_NULL;
     } else {
       dataToPass = LITERAL_NULL;
     }
 
+    Map<String, Expression> paramDefaults = getDefaultParams(callNode, translationContext);
     // ------ Case 1: No additional params ------
     if (callNode.numChildren() == 0) {
-      return dataToPass;
+      if (!paramDefaults.isEmpty()) {
+        dataToPass = SOY_ASSIGN_DEFAULTS.call(dataToPass, Expression.objectLiteral(paramDefaults));
+      }
+      // Ignore inconsistencies between Closure Compiler & Soy type systems (eg, proto nullability).
+      return dataToPass.castAs("?");
     }
 
     // ------ Build an object literal containing the additional params ------
-    ImmutableList.Builder<Expression> keys = ImmutableList.builder();
-    ImmutableList.Builder<Expression> values = ImmutableList.builder();
+    Map<String, Expression> params = paramDefaults;
 
     for (CallParamNode child : callNode.getChildren()) {
-      keys.add(id(child.getKey().identifier()));
+      Expression value;
 
       if (child instanceof CallParamValueNode) {
         CallParamValueNode cpvn = (CallParamValueNode) child;
-        Expression value =
-            new TranslateExprNodeVisitor(translationContext, errorReporter).exec(cpvn.getExpr());
-        values.add(value);
+        value = exprTranslator.exec(cpvn.getExpr());
       } else {
         CallParamContentNode cpcn = (CallParamContentNode) child;
 
-        Expression content;
         if (isComputableAsJsExprsVisitor.exec(cpcn)) {
           List<Expression> chunks =
               genJsExprsVisitorFactory
                   .create(translationContext, templateAliases, errorReporter)
                   .exec(cpcn);
-          content = CodeChunkUtils.concatChunksForceString(chunks);
+          value = CodeChunkUtils.concatChunksForceString(chunks);
         } else {
           // This is a param with content that cannot be represented as JS expressions, so we assume
           // that code has been generated to define the temporary variable 'param<n>'.
-          content = id("param" + cpcn.getId());
+          value = id("param" + cpcn.getId());
         }
 
-        content = maybeWrapContent(translationContext.codeGenerator(), cpcn, content);
-        values.add(content);
+        value = maybeWrapContent(translationContext.codeGenerator(), cpcn, value);
       }
+      params.put(child.getKey().identifier(), value);
     }
 
-    Expression params = Expression.objectLiteral(keys.build(), values.build());
+    Expression paramsExp = Expression.objectLiteral(params);
 
     // ------ Cases 2 and 3: Additional params with and without original data to pass ------
     if (callNode.isPassingData()) {
-      Expression allData = SOY_ASSIGN_DEFAULTS.call(params, dataToPass);
+      Expression allData = SOY_ASSIGN_DEFAULTS.call(paramsExp, dataToPass);
+      // No need to cast; assignDefaults already returns {?}.
       return allData;
     } else {
-      return params;
+      // Ignore inconsistencies between Closure Compiler & Soy type systems (eg, proto nullability).
+      return paramsExp.castAs("?");
     }
+  }
+
+  private Map<String, Expression> getDefaultParams(
+      CallNode node, TranslationContext translationContext) {
+    Map<String, Expression> defaultParams = new LinkedHashMap<>();
+    if (!node.isPassingAllData()) {
+      return defaultParams;
+    }
+    for (TemplateParam param : node.getNearestAncestor(TemplateNode.class).getParams()) {
+      if (param.hasDefault()) {
+        // Just put the parameter value in here, which will be the default if the parameter is
+        // unset. The additional JS to figure out of a parameter is the default or not isn't worth
+        // it.
+        defaultParams.put(
+            param.name(), translationContext.soyToJsVariableMappings().get(param.name()));
+      }
+    }
+    return defaultParams;
   }
 
   /**

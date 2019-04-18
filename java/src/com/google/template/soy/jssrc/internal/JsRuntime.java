@@ -18,6 +18,13 @@ package com.google.template.soy.jssrc.internal;
 import static com.google.template.soy.jssrc.dsl.Expression.dottedIdNoRequire;
 import static com.google.template.soy.jssrc.dsl.Expression.id;
 
+import com.google.common.collect.ImmutableMap;
+import com.google.common.html.types.SafeHtmlProto;
+import com.google.common.html.types.SafeScriptProto;
+import com.google.common.html.types.SafeStyleProto;
+import com.google.common.html.types.SafeStyleSheetProto;
+import com.google.common.html.types.SafeUrlProto;
+import com.google.common.html.types.TrustedResourceUrlProto;
 import com.google.protobuf.Descriptors.Descriptor;
 import com.google.protobuf.Descriptors.FieldDescriptor;
 import com.google.template.soy.base.SoyBackendKind;
@@ -44,6 +51,7 @@ public final class JsRuntime {
   private static final GoogRequire SOY_MAP = GoogRequire.create("soy.map");
   private static final GoogRequire SOY_NEWMAPS = GoogRequire.create("soy.newmaps");
   private static final GoogRequire SOY_ASSERTS = GoogRequire.create("soy.asserts");
+  public static final GoogRequire SOY_VELOG = GoogRequire.create("soy.velog");
 
   private static final GoogRequire XID_REQUIRE = GoogRequire.create("xid");
 
@@ -72,6 +80,8 @@ public final class JsRuntime {
   public static final Expression GOOG_IS_OBJECT = dottedIdNoRequire("goog.isObject");
 
   public static final Expression GOOG_IS_STRING = dottedIdNoRequire("goog.isString");
+
+  public static final Expression GOOG_IS_DEF = dottedIdNoRequire("goog.isDef");
 
   public static final Expression GOOG_REQUIRE = dottedIdNoRequire("goog.require");
 
@@ -103,6 +113,11 @@ public final class JsRuntime {
 
   public static final Expression SOY_GET_DELTEMPLATE_ID = SOY.dotAccess("$$getDelTemplateId");
 
+  public static final Expression SOY_IS_LOCALE_RTL = SOY.dotAccess("$$IS_LOCALE_RTL");
+
+  public static final Expression SOY_DEBUG_SOY_TEMPLATE_INFO =
+      SOY.dotAccess("$$debugSoyTemplateInfo");
+
   public static final Expression SOY_MAP_POPULATE = SOY_MAP.dotAccess("$$populateMap");
 
   public static final Expression SOY_MAP_MAYBE_COERCE_KEY_TO_STRING =
@@ -113,18 +128,52 @@ public final class JsRuntime {
   public static final Expression SOY_NEWMAPS_TRANSFORM_VALUES =
       SOY_NEWMAPS.dotAccess("$$transformValues");
 
+  public static final Expression SOY_VISUAL_ELEMENT = SOY_VELOG.dotAccess("$$VisualElement");
+  public static final Expression SOY_VISUAL_ELEMENT_DATA =
+      SOY_VELOG.dotAccess("$$VisualElementData");
+
   public static final Expression WINDOW_CONSOLE_LOG = dottedIdNoRequire("window.console.log");
 
   public static final Expression XID = XID_REQUIRE.reference();
-
-  /** A constant for the template parameter {@code opt_data}. */
-  public static final Expression STATE = id("this").dotAccess("state");
 
   /** A constant for the template parameter {@code opt_data}. */
   public static final Expression OPT_DATA = id("opt_data");
 
   /** A constant for the template parameter {@code opt_ijData}. */
   public static final Expression OPT_IJ_DATA = id("opt_ijData");
+
+  public static final Expression EXPORTS = id("exports");
+
+  /** The JavaScript method to pack a sanitized object into a safe proto. */
+  public static final ImmutableMap<String, Expression> JS_TO_PROTO_PACK_FN_BASE =
+      ImmutableMap.<String, Expression>builder()
+          .put(
+              SafeScriptProto.getDescriptor().getFullName(),
+              GoogRequire.create("soydata.packSanitizedJsToProtoSoyRuntimeOnly").reference())
+          .put(
+              SafeUrlProto.getDescriptor().getFullName(),
+              GoogRequire.create("soydata.packSanitizedUriToProtoSoyRuntimeOnly").reference())
+          .put(
+              SafeStyleProto.getDescriptor().getFullName(),
+              GoogRequire.create("soydata.packSanitizedCssToSafeStyleProtoSoyRuntimeOnly")
+                  .reference())
+          .put(
+              SafeStyleSheetProto.getDescriptor().getFullName(),
+              GoogRequire.create("soydata.packSanitizedCssToSafeStyleSheetProtoSoyRuntimeOnly")
+                  .reference())
+          .put(
+              TrustedResourceUrlProto.getDescriptor().getFullName(),
+              GoogRequire.create("soydata.packSanitizedTrustedResourceUriToProtoSoyRuntimeOnly")
+                  .reference())
+          .build();
+
+  public static final ImmutableMap<String, Expression> JS_TO_PROTO_PACK_FN =
+      ImmutableMap.<String, Expression>builder()
+          .put(
+              SafeHtmlProto.getDescriptor().getFullName(),
+              GoogRequire.create("soydata.packSanitizedHtmlToProtoSoyRuntimeOnly").reference())
+          .putAll(JS_TO_PROTO_PACK_FN_BASE)
+          .build();
 
   /** Returns the field containing the extension object for the given field descriptor. */
   public static Expression extensionField(FieldDescriptor desc) {
@@ -136,11 +185,6 @@ public final class JsRuntime {
   /** Returns a function that can 'unpack' safe proto types into sanitized content types.. */
   public static Expression protoToSanitizedContentConverterFunction(Descriptor messageType) {
     return GoogRequire.create(NodeContentKinds.toJsUnpackFunction(messageType)).reference();
-  }
-
-  /** Returns a function that can 'unpack' safe proto types into sanitized content types.. */
-  public static Expression sanitizedContentToProtoConverterFunction(Descriptor messageType) {
-    return GoogRequire.create(NodeContentKinds.toJsPackFunction(messageType)).reference();
   }
 
   /**

@@ -18,8 +18,8 @@ package com.google.template.soy.jssrc.dsl;
 
 import com.google.auto.value.AutoValue;
 import com.google.common.collect.ImmutableSet;
+import com.google.errorprone.annotations.Immutable;
 import javax.annotation.Nullable;
-import javax.annotation.concurrent.Immutable;
 
 /** Represents a variable declaration. */
 @AutoValue
@@ -29,7 +29,7 @@ public abstract class VariableDeclaration extends Statement {
   public static Builder builder(String name) {
     return new AutoValue_VariableDeclaration.Builder()
         .setVarName(name)
-        .setGoogRequires(ImmutableSet.<GoogRequire>of());
+        .setGoogRequires(ImmutableSet.of());
   }
 
   abstract String varName();
@@ -68,7 +68,7 @@ public abstract class VariableDeclaration extends Statement {
       ctx.appendInitialStatements(rhs());
     }
     if (jsDoc() != null) {
-      ctx.append(jsDoc().toString()).endLine();
+      ctx.append(jsDoc()).endLine();
     }
     ctx.append("var ").append(varName());
     if (rhs() != null) {
@@ -84,6 +84,9 @@ public abstract class VariableDeclaration extends Statement {
     }
     if (rhs() != null) {
       rhs().collectRequires(collector);
+    }
+    if (jsDoc() != null) {
+      jsDoc().collectRequires(collector);
     }
   }
 

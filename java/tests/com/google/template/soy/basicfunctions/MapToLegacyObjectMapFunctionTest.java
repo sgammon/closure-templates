@@ -18,7 +18,6 @@ package com.google.template.soy.basicfunctions;
 
 import static com.google.common.truth.Truth.assertThat;
 
-import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.template.soy.data.SoyDict;
 import com.google.template.soy.data.SoyValueConverter;
@@ -26,9 +25,7 @@ import com.google.template.soy.data.SoyValueConverterUtility;
 import com.google.template.soy.data.internal.SoyMapImpl;
 import com.google.template.soy.data.restricted.IntegerData;
 import com.google.template.soy.data.restricted.StringData;
-import com.google.template.soy.jssrc.restricted.JsExpr;
 import com.google.template.soy.plugin.java.restricted.testing.SoyJavaSourceFunctionTester;
-import com.google.template.soy.pysrc.restricted.PyExpr;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
@@ -55,19 +52,5 @@ public final class MapToLegacyObjectMapFunctionTest {
     // Keys are coerced to strings in the legacy object map.
     assertThat(convertedMap.getItem(StringData.forValue("42")))
         .isEqualTo(expectedMap.getItem(StringData.forValue("42")));
-  }
-
-  @Test
-  public void computeForJsSrc() {
-    JsExpr map = new JsExpr("map", Integer.MAX_VALUE);
-    JsExpr legacyObjectMap = MAP_TO_LEGACY_OBJECT_MAP.computeForJsSrc(ImmutableList.of(map));
-    assertThat(legacyObjectMap.getText()).isEqualTo("soy.map.$$mapToLegacyObjectMap(map)");
-  }
-
-  @Test
-  public void computeForPySrc() {
-    PyExpr map = new PyExpr("map", Integer.MAX_VALUE);
-    PyExpr legacyObjectMap = MAP_TO_LEGACY_OBJECT_MAP.computeForPySrc(ImmutableList.of(map));
-    assertThat(legacyObjectMap.getText()).isEqualTo("runtime.map_to_legacy_object_map(map)");
   }
 }

@@ -32,7 +32,7 @@ import java.lang.reflect.Constructor;
 public final class ValidatedConformanceConfig {
   /** An empty configuration. */
   public static final ValidatedConformanceConfig EMPTY =
-      new ValidatedConformanceConfig(ImmutableList.<RuleWithWhitelists>of());
+      new ValidatedConformanceConfig(ImmutableList.of());
 
   private static final Escaper MESSAGE_FORMAT =
       Escapers.builder().addEscape('{', "'{").addEscape('}', "}'").build();
@@ -87,21 +87,20 @@ public final class ValidatedConformanceConfig {
         return new BannedFunction(ImmutableSet.copyOf(bannedFunction.getFunctionList()), error);
       case BANNED_RAW_TEXT:
         Requirement.BannedRawText bannedRawText = requirement.getBannedRawText();
-        return new BannedRawText(ImmutableSet.copyOf(bannedRawText.getTextList()), error);
+        return new BannedRawText(
+            ImmutableSet.copyOf(bannedRawText.getTextList()),
+            ImmutableSet.copyOf(bannedRawText.getExceptInHtmlAttributeList()),
+            error);
       case BANNED_HTML_TAG:
         Requirement.BannedHtmlTag bannedHtmlTag = requirement.getBannedHtmlTag();
         return new BannedHtmlTag(bannedHtmlTag.getTagList(), error);
-      case REQUIRE_STRICT_AUTOESCAPING:
-        return new RequireStrictAutoescaping(error);
-      case REQUIRE_STRONGLY_TYPED_IJ_PARAMS:
-        return new RequireStronglyTypedIjParams(error);
       case BAN_XID_FOR_CSS_OBFUSCATION:
         return new BanXidForCssObfuscation(error);
       case REQUIREMENTTYPE_NOT_SET:
-      default:
         throw new AssertionError(
             "unexpected requirement type: " + requirement.getRequirementTypeCase());
     }
+    throw new AssertionError(requirement.getRequirementTypeCase());
   }
 
   /**
@@ -132,5 +131,10 @@ public final class ValidatedConformanceConfig {
       throw new IllegalArgumentException(
           "unable to construct custom rule class: " + javaClass + ": " + e.getMessage(), e);
     }
+  }
+
+  public ValidatedConformanceConfig concat(ValidatedConformanceConfig other) {
+    return new ValidatedConformanceConfig(
+        ImmutableList.<RuleWithWhitelists>builder().addAll(rules).addAll(other.rules).build());
   }
 }

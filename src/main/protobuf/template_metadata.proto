@@ -1,0 +1,147 @@
+// This file is a serialized dual of c.g.template.soy.soytree.TemplateMetadata
+//
+// This represents just enough information to accurately reconstruct those
+// objects for dependency templates.
+//
+// This represents a non-stable compiler internal interface.  Users should not
+// rely on these objects to be stable between compiler releases.
+syntax = "proto3";
+
+package soy.compiler;
+
+option java_package = "com.google.template.soy.soytree";
+option java_outer_classname = "TemplateMetadataProto";
+option java_multiple_files = true;
+
+// Represents a set of files
+message CompilationUnit {
+  repeated SoyFileP file = 1;
+}
+
+// Represents a soy file
+// File global information should be represented here to avoid duplicating data
+// across each template.
+message SoyFileP {
+  string file_path = 1;
+  string delpackage = 2;
+  string namespace = 3;
+  repeated TemplateMetadataP template = 4;
+}
+
+// A soy type
+message SoyTypeP {
+  // a simple type
+  enum PrimitiveTypeP {
+    UNKNOWN_PRIMITIVE_TYPE = 0;
+    ANY = 1;
+    UNKNOWN = 2;
+    NULL = 3;
+    BOOL = 4;
+    INT = 5;
+    FLOAT = 6;
+    STRING = 7;
+    HTML = 8;
+    ATTRIBUTES = 9;
+    JS = 10;
+    CSS = 11;
+    URI = 12;
+    TRUSTED_RESOURCE_URI = 13;
+    VE_DATA = 14;
+  }
+  message RecordTypeP {
+    map<string, SoyTypeP> field = 1;
+  }
+  message LegacyObjectMapTypeP {
+    SoyTypeP key = 1;
+    SoyTypeP value = 2;
+  }
+  message MapTypeP {
+    SoyTypeP key = 1;
+    SoyTypeP value = 2;
+  }
+  message UnionTypeP {
+    repeated SoyTypeP member = 1;
+  }
+  // discriminated union of the different type categories
+  oneof TypeKind {
+    PrimitiveTypeP primitive = 1;
+    SoyTypeP list_element = 2;
+    RecordTypeP record = 3;
+    LegacyObjectMapTypeP legacy_object_map = 4;
+    MapTypeP map = 5;
+    string proto = 6;
+    string proto_enum = 7;
+    UnionTypeP union = 8;
+    string ve = 9;
+  }
+}
+
+// A single declared template parameter
+message ParameterP {
+  // The parameter name
+  string name = 1;
+  // The type of the parameter.
+  SoyTypeP type = 2;
+  // Whether or not the parameter is required.
+  bool required = 3;
+}
+
+// Represents a call within a template.
+message DataAllCallSituationP {
+  // The template name.
+  // if this is a delcall or a call to a template in another file, this will be
+  // fully qualified.  If it is a call to a template in the current namespace
+  // it will be prefixed with a single dot.
+  string template_name = 1;
+  // Whether this is a delcall
+  bool del_call = 2;
+  // The names of the explicitly passed parameters.
+  repeated string explicitly_passed_parameters = 3;
+}
+
+// A duplicate of SanitizedContentKind
+enum SanitizedContentKindP {
+  UNKNOWN_SANITIZED_CONTENT_KIND = 0;
+  HTML = 1;
+  JS = 2;
+  URI = 3;
+  TRUSTED_RESOURCE_URI = 4;
+  ATTRIBUTES = 5;
+  CSS = 6;
+  TEXT = 7;
+  NONE = 8;
+}
+// The kind of the template.
+enum TemplateKindP {
+  UNKNOWN_TEMPLATE_KIND = 0;
+  BASIC = 1;
+  ELEMENT = 2;
+  DELTEMPLATE = 3;
+}
+
+// The visibility of the template.
+enum VisibilityP {
+  UNKNOWN_VISIBILITY = 0;
+  PUBLIC = 1;
+  PRIVATE = 2;
+}
+
+// Represents a soy template.
+message TemplateMetadataP {
+  TemplateKindP template_kind = 1;
+  // The template name.
+  // For basic templates or elements this will be a partial name
+  // For deltemplates it will be the fully qualified deltemplate name.
+  string template_name = 2;
+
+  // The variant string.  Will be empty for basic templates or deltemplates with
+  // no variant.
+  string del_template_variant = 3;
+  SanitizedContentKindP content_kind = 4;
+  bool strict_html = 5;
+  VisibilityP visibility = 6;
+  repeated ParameterP parameter = 7;
+  repeated DataAllCallSituationP data_all_call_situation = 8;
+
+  reserved 9;
+}

@@ -19,12 +19,10 @@ package com.google.template.soy.types;
 import static com.google.common.truth.Truth.assertThat;
 
 import com.google.common.collect.ImmutableList;
-import com.google.common.collect.Iterables;
-import com.google.template.soy.SoyFileSetParserBuilder;
 import com.google.template.soy.base.SourceLocation;
+import com.google.template.soy.base.internal.Identifier;
 import com.google.template.soy.error.ErrorReporter;
-import com.google.template.soy.soytree.TemplateNode;
-import com.google.template.soy.soytree.defn.HeaderParam;
+import com.google.template.soy.soyparse.SoyFileParser;
 import com.google.template.soy.types.ast.GenericTypeNode;
 import com.google.template.soy.types.ast.NamedTypeNode;
 import com.google.template.soy.types.ast.RecordTypeNode;
@@ -38,12 +36,12 @@ import org.junit.runners.JUnit4;
 
 @RunWith(JUnit4.class)
 public final class TypeNodeTest {
-  private static final SourceLocation sourceLocation = SourceLocation.UNKNOWN;
+  private static final SourceLocation SOURCE_LOCATION = SourceLocation.UNKNOWN;
 
-  private static final NamedTypeNode TYPE_ABC = NamedTypeNode.create(sourceLocation, "abc");
-  private static final NamedTypeNode TYPE_DEF = NamedTypeNode.create(sourceLocation, "def");
-  private static final NamedTypeNode TYPE_GHI = NamedTypeNode.create(sourceLocation, "ghi");
-  private static final NamedTypeNode TYPE_JKL = NamedTypeNode.create(sourceLocation, "jkl");
+  private static final NamedTypeNode TYPE_ABC = NamedTypeNode.create(SOURCE_LOCATION, "abc");
+  private static final NamedTypeNode TYPE_DEF = NamedTypeNode.create(SOURCE_LOCATION, "def");
+  private static final NamedTypeNode TYPE_GHI = NamedTypeNode.create(SOURCE_LOCATION, "ghi");
+  private static final NamedTypeNode TYPE_JKL = NamedTypeNode.create(SOURCE_LOCATION, "jkl");
 
   @Test
   public void testNamedTypeToString() throws Exception {
@@ -53,52 +51,61 @@ public final class TypeNodeTest {
   @Test
   public void testGenericTypeToString() throws Exception {
     assertThat(
-            GenericTypeNode.create(sourceLocation, "foo", ImmutableList.<TypeNode>of()).toString())
+            GenericTypeNode.create(
+                    SOURCE_LOCATION, Identifier.create("foo", SOURCE_LOCATION), ImmutableList.of())
+                .toString())
         .isEqualTo("foo<>");
     assertThat(
-            GenericTypeNode.create(sourceLocation, "list", ImmutableList.of(TYPE_ABC)).toString())
+            GenericTypeNode.create(
+                    SOURCE_LOCATION,
+                    Identifier.create("list", SOURCE_LOCATION),
+                    ImmutableList.of(TYPE_ABC))
+                .toString())
         .isEqualTo("list<abc>");
     assertThat(
-            GenericTypeNode.create(sourceLocation, "map", ImmutableList.of(TYPE_ABC, TYPE_DEF))
+            GenericTypeNode.create(
+                    SOURCE_LOCATION,
+                    Identifier.create("map", SOURCE_LOCATION),
+                    ImmutableList.of(TYPE_ABC, TYPE_DEF))
                 .toString())
         .isEqualTo("map<abc, def>");
   }
 
   @Test
   public void testRecordTypeToString() throws Exception {
-    assertThat(RecordTypeNode.create(sourceLocation, ImmutableList.<Property>of()).toString())
+    assertThat(RecordTypeNode.create(SOURCE_LOCATION, ImmutableList.of()).toString())
         .isEqualTo("[]");
     assertThat(
             RecordTypeNode.create(
-                    sourceLocation,
-                    ImmutableList.of(Property.create(sourceLocation, "x", TYPE_ABC)))
+                    SOURCE_LOCATION,
+                    ImmutableList.of(Property.create(SOURCE_LOCATION, "x", TYPE_ABC)))
                 .toString())
         .isEqualTo("[x: abc]");
 
     assertThat(
             RecordTypeNode.create(
-                    sourceLocation,
+                    SOURCE_LOCATION,
                     ImmutableList.of(
-                        Property.create(sourceLocation, "x", TYPE_ABC),
-                        Property.create(sourceLocation, "y", TYPE_DEF)))
+                        Property.create(SOURCE_LOCATION, "x", TYPE_ABC),
+                        Property.create(SOURCE_LOCATION, "y", TYPE_DEF)))
                 .toString())
         .isEqualTo("[x: abc, y: def]");
 
     assertThat(
             RecordTypeNode.create(
-                    sourceLocation,
+                    SOURCE_LOCATION,
                     ImmutableList.of(
-                        Property.create(sourceLocation, "x", TYPE_ABC),
-                        Property.create(sourceLocation, "y", TYPE_DEF),
-                        Property.create(sourceLocation, "z", TYPE_GHI),
-                        Property.create(sourceLocation, "w", TYPE_JKL)))
+                        Property.create(SOURCE_LOCATION, "x", TYPE_ABC),
+                        Property.create(SOURCE_LOCATION, "y", TYPE_DEF),
+                        Property.create(SOURCE_LOCATION, "z", TYPE_GHI),
+                        Property.create(SOURCE_LOCATION, "w", TYPE_JKL)))
                 .toString())
         .isEqualTo("[\n  x: abc,\n  y: def,\n  z: ghi,\n  w: jkl\n]");
   }
 
   @Test
   public void testUnionTypeToString() throws Exception {
-    assertThat(UnionTypeNode.create(ImmutableList.<TypeNode>of(TYPE_ABC, TYPE_DEF)).toString())
+    assertThat(UnionTypeNode.create(ImmutableList.of(TYPE_ABC, TYPE_DEF)).toString())
         .isEqualTo("abc|def");
   }
 
@@ -119,6 +126,11 @@ public final class TypeNodeTest {
     // different due to whitespace.
     assertThat(original.toString()).isEqualTo(reparsed.toString());
     assertEquals(original, reparsed);
+
+    // Also assert equality after copying
+    assertEquals(original, reparsed.copy());
+    assertEquals(original.copy(), reparsed.copy());
+    assertEquals(original.copy(), reparsed);
   }
 
   private static void assertEquals(
@@ -167,16 +179,10 @@ public final class TypeNodeTest {
   }
 
   private TypeNode parse(String typeString) {
-    TemplateNode template =
-        SoyFileSetParserBuilder.forTemplateContents(
-                "{@param p : " + typeString + "}\n{$p ? 't' : 'f'}")
-            .typeRegistry(new SoyTypeRegistry())
-            .errorReporter(ErrorReporter.exploding()) // ignore parse errors
-            .parse()
-            .fileSet()
-            .getChild(0)
-            .getChild(0);
-    HeaderParam param = (HeaderParam) Iterables.getOnlyElement(template.getAllParams());
-    return param.getTypeNode();
+    TypeNode typeNode =
+        SoyFileParser.parseType(typeString, "fake-file.soy", ErrorReporter.exploding());
+    // sanity, make sure copies work
+    assertThat(typeNode).isEqualTo(typeNode.copy());
+    return typeNode;
   }
 }

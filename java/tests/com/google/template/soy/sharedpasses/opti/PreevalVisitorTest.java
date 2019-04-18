@@ -23,7 +23,6 @@ import com.google.common.collect.ImmutableMap;
 import com.google.template.soy.SoyFileSetParserBuilder;
 import com.google.template.soy.data.SoyValue;
 import com.google.template.soy.data.SoyValueConverterUtility;
-import com.google.template.soy.data.SoyValueProvider;
 import com.google.template.soy.exprtree.ExprRootNode;
 import com.google.template.soy.sharedpasses.render.Environment;
 import com.google.template.soy.sharedpasses.render.RenderException;
@@ -87,17 +86,6 @@ public final class PreevalVisitorTest {
     }
   }
 
-  @Test
-  public void testPreevalWithIjData() {
-
-    try {
-      preeval("6 + $ij.foo");
-      fail();
-    } catch (RenderException re) {
-      // Test passes.
-    }
-  }
-
   // -----------------------------------------------------------------------------------------------
   // Helpers.
 
@@ -123,8 +111,7 @@ public final class PreevalVisitorTest {
     ExprRootNode expr = code.getExpr();
     Environment env =
         TestingEnvironment.createForTest(
-            SoyValueConverterUtility.newDict("boo", 8),
-            ImmutableMap.<String, SoyValueProvider>of());
+            SoyValueConverterUtility.newDict("boo", 8), ImmutableMap.of());
 
     return new PreevalVisitor(env).exec(expr);
   }

@@ -29,12 +29,14 @@ import com.google.template.soy.basetree.ParentNode;
 import com.google.template.soy.exprtree.ExprNode;
 import com.google.template.soy.exprtree.ExprRootNode;
 import com.google.template.soy.exprtree.FunctionNode;
-import com.google.template.soy.shared.restricted.SoyPureFunction;
+import com.google.template.soy.shared.restricted.SoyFunction;
 import com.google.template.soy.soytree.SoyNode.ExprHolderNode;
+import com.google.template.soy.soytree.SoyNode.Kind;
 import com.google.template.soy.soytree.SoyNode.ParentSoyNode;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.function.Predicate;
 
 /**
  * Shared utilities for the 'soytree' package.
@@ -56,7 +58,7 @@ public final class SoyTreeUtils {
 
       @Override
       public VisitDirective exec(Node node) {
-        for (Class type : types) {
+        for (Class<?> type : types) {
           if (type.isInstance(node)) {
             found = true;
             return VisitDirective.ABORT;
@@ -119,8 +121,6 @@ public final class SoyTreeUtils {
           continue;
         case SKIP_CHILDREN:
           continue;
-        default:
-          throw new AssertionError();
       }
     }
   }
@@ -135,6 +135,15 @@ public final class SoyTreeUtils {
    */
   public static <T extends Node> ImmutableList<T> getAllNodesOfType(
       Node rootSoyNode, final Class<T> classObject) {
+    return getAllMatchingNodesOfType(rootSoyNode, classObject, arg -> true);
+  }
+
+  /**
+   * Retrieves all nodes in a tree that are an instance of a particular class and match the given
+   * predicate.
+   */
+  private static <T extends Node> ImmutableList<T> getAllMatchingNodesOfType(
+      Node rootSoyNode, final Class<T> classObject, final Predicate<T> filter) {
     final ImmutableList.Builder<T> matchedNodesBuilder = ImmutableList.builder();
     // optimization to avoid navigating into expr trees if we can't possibly match anything
     final boolean exploreExpressions = ExprNode.class.isAssignableFrom(classObject);
@@ -144,7 +153,10 @@ public final class SoyTreeUtils {
           @Override
           public VisitDirective exec(Node node) {
             if (classObject.isInstance(node)) {
-              matchedNodesBuilder.add(classObject.cast(node));
+              T typedNode = classObject.cast(node);
+              if (filter.test(typedNode)) {
+                matchedNodesBuilder.add(typedNode);
+              }
             }
             if (!exploreExpressions && node instanceof ExprNode) {
               return VisitDirective.SKIP_CHILDREN;
@@ -153,6 +165,17 @@ public final class SoyTreeUtils {
           }
         });
     return matchedNodesBuilder.build();
+  }
+
+  /**
+   * Returns all {@link FunctionNode}s in a tree that are calls of the given {@link SoyFunction}.
+   */
+  public static ImmutableList<FunctionNode> getAllFunctionInvocations(
+      Node rootSoyNode, final SoyFunction functionToMatch) {
+    return getAllMatchingNodesOfType(
+        rootSoyNode,
+        FunctionNode.class,
+        function -> functionToMatch.equals(function.getSoyFunction()));
   }
 
   /**
@@ -333,7 +356,7 @@ public final class SoyTreeUtils {
   }
 
   public static String toSourceString(List<? extends Node> nodes) {
-    List<String> strings = new ArrayList<String>(nodes.size());
+    List<String> strings = new ArrayList<>(nodes.size());
     for (Node node : nodes) {
       strings.add(node.toSourceString());
     }
@@ -342,30 +365,45 @@ public final class SoyTreeUtils {
 
   /**
    * Return whether the given root node is a constant expression or not. Pure functions are
-   * considered constant iff their parameter is a constant expression.
+   * considered constant iff their parameters are all constant expressions.
    *
    * @param rootSoyNode the root of the expression tree.
    * @return {@code true} if the expression is constant in evaluation, {@code false} otherwise.
    */
   public static boolean isConstantExpr(ExprNode rootSoyNode) {
+    return getNonConstantChildren(rootSoyNode, /*all=*/ false).isEmpty();
+  }
+
+  /**
+   * Returns a list of all the subexpressions that are non-constant. Pure functions are considered
+   * constant iff their parameters are all constant expressions.
+   *
+   * @param rootSoyNode the root of the expression tree.
+   */
+  public static ImmutableList<ExprNode> getNonConstantChildren(ExprNode rootSoyNode) {
+    return getNonConstantChildren(rootSoyNode, /*all=*/ true);
+  }
+
+  private static ImmutableList<ExprNode> getNonConstantChildren(ExprNode rootSoyNode, boolean all) {
     class ConstantNodeVisitor implements NodeVisitor<Node, VisitDirective> {
-      boolean isConstant = true;
+      ImmutableList.Builder<ExprNode> nonConstantExpressions = ImmutableList.builder();
 
       @Override
       public VisitDirective exec(Node node) {
         // Note: ExprNodes only contain other ExprNodes, so this down-cast is safe.
-        switch (((ExprNode) node).getKind()) {
+        ExprNode expr = (ExprNode) node;
+        switch (expr.getKind()) {
           case VAR_REF_NODE:
-            isConstant = false;
-            return VisitDirective.ABORT;
+            nonConstantExpressions.add(expr);
+            return all ? VisitDirective.CONTINUE : VisitDirective.ABORT;
           case FUNCTION_NODE:
             FunctionNode fn = (FunctionNode) node;
-            if (fn.getSoyFunction().getClass().isAnnotationPresent(SoyPureFunction.class)) {
+            if (fn.isPure()) {
               // Continue to evaluate the const-ness of the pure function's parameters.
               return VisitDirective.CONTINUE;
             } else {
-              isConstant = false;
-              return VisitDirective.ABORT;
+              nonConstantExpressions.add(expr);
+              return all ? VisitDirective.CONTINUE : VisitDirective.ABORT;
             }
           default:
             return VisitDirective.CONTINUE;
@@ -375,6 +413,30 @@ public final class SoyTreeUtils {
 
     ConstantNodeVisitor visitor = new ConstantNodeVisitor();
     visitAllNodes(rootSoyNode, visitor);
-    return visitor.isConstant;
+    return visitor.nonConstantExpressions.build();
+  }
+
+  /**
+   * Returns the node as an HTML tag node, if one can be extracted from it (e.g. wrapped in a
+   * MsgPlaceholderNode). Otherwise, returns null.
+   */
+  public static HtmlTagNode getNodeAsHtmlTagNode(SoyNode node, boolean openTag) {
+    SoyNode.Kind tagKind =
+        openTag ? SoyNode.Kind.HTML_OPEN_TAG_NODE : SoyNode.Kind.HTML_CLOSE_TAG_NODE;
+    if (node.getKind() == tagKind) {
+      return (HtmlTagNode) node;
+    }
+    // In a msg tag it will be a placeholder, wrapping a MsgHtmlTagNode wrapping the HtmlTagNode.
+    if (node.getKind() == Kind.MSG_PLACEHOLDER_NODE) {
+      MsgPlaceholderNode placeholderNode = (MsgPlaceholderNode) node;
+      if (placeholderNode.numChildren() == 1
+          && placeholderNode.getChild(0).getKind() == Kind.MSG_HTML_TAG_NODE) {
+        MsgHtmlTagNode msgHtmlTagNode = (MsgHtmlTagNode) placeholderNode.getChild(0);
+        if (msgHtmlTagNode.numChildren() == 1 && msgHtmlTagNode.getChild(0).getKind() == tagKind) {
+          return (HtmlTagNode) msgHtmlTagNode.getChild(0);
+        }
+      }
+    }
+    return null;
   }
 }

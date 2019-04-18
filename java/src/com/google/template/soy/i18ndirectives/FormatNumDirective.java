@@ -121,11 +121,6 @@ class FormatNumDirective
   }
 
   @Override
-  public boolean shouldCancelAutoescape() {
-    return false;
-  }
-
-  @Override
   public SoyValue applyForJava(SoyValue value, List<SoyValue> args) {
     ULocale uLocale = I18nUtils.parseULocale(localeStringProvider.get());
     String formatType = args.isEmpty() ? DEFAULT_FORMAT : args.get(0).stringValue();
@@ -168,7 +163,7 @@ class FormatNumDirective
       expr.append(".setSignificantDigits(3)"); // Note that this trims trailing zeros.
     }
 
-    expr.append(".format(" + value.getText() + ")");
+    expr.append(".format(/** @type {number} */ (").append(value.getText()).append("))");
 
     return new JsExpr(expr.toString(), Integer.MAX_VALUE);
   }
@@ -221,25 +216,21 @@ class FormatNumDirective
     Expression minFractionDigits =
         args.size() > 2
             ? MethodRef.create(Integer.class, "valueOf", int.class)
-                .invoke(
-                    BytecodeUtils.numericConversion(args.get(2).unboxAs(long.class), Type.INT_TYPE))
+                .invoke(BytecodeUtils.numericConversion(args.get(2).unboxAsLong(), Type.INT_TYPE))
             : BytecodeUtils.constantNull(Type.getType(Integer.class));
 
     Expression maxFractionDigits =
         args.size() > 3
             ? MethodRef.create(Integer.class, "valueOf", int.class)
-                .invoke(
-                    BytecodeUtils.numericConversion(args.get(3).unboxAs(long.class), Type.INT_TYPE))
+                .invoke(BytecodeUtils.numericConversion(args.get(3).unboxAsLong(), Type.INT_TYPE))
             : minFractionDigits;
 
     return SoyExpression.forString(
         JbcSrcMethods.FORMAT_NUM.invoke(
             context.getULocale(),
             value.coerceToDouble(),
-            !args.isEmpty()
-                ? args.get(0).unboxAs(String.class)
-                : BytecodeUtils.constant(DEFAULT_FORMAT),
-            args.size() > 1 ? args.get(1).unboxAs(String.class) : BytecodeUtils.constant("local"),
+            !args.isEmpty() ? args.get(0).unboxAsString() : BytecodeUtils.constant(DEFAULT_FORMAT),
+            args.size() > 1 ? args.get(1).unboxAsString() : BytecodeUtils.constant("local"),
             minFractionDigits,
             maxFractionDigits));
   }
@@ -257,7 +248,7 @@ class FormatNumDirective
     if (!JS_ARGS_TO_ENUM.containsKey(numberFormatType)) {
       String validKeys = Joiner.on("', '").join(JS_ARGS_TO_ENUM.keySet());
       throw new IllegalArgumentException(
-          "First argument to formatNum must be " + "constant, and one of: '" + validKeys + "'.");
+          "First argument to formatNum must be constant, and one of: '" + validKeys + "'.");
     }
 
     return numberFormatType;

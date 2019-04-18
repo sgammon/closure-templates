@@ -20,6 +20,7 @@ import static com.google.common.truth.Truth.assertThat;
 import static com.google.template.soy.data.SoyValueConverter.EMPTY_DICT;
 import static com.google.template.soy.data.SoyValueConverter.EMPTY_LIST;
 import static com.google.template.soy.jbcsrc.TemplateTester.asRecord;
+import static com.google.template.soy.jbcsrc.TemplateTester.assertThatElementBody;
 import static com.google.template.soy.jbcsrc.TemplateTester.assertThatFile;
 import static com.google.template.soy.jbcsrc.TemplateTester.assertThatTemplateBody;
 import static com.google.template.soy.jbcsrc.TemplateTester.getDefaultContext;
@@ -27,8 +28,6 @@ import static com.google.template.soy.jbcsrc.TemplateTester.getDefaultContextWit
 import static org.junit.Assert.fail;
 
 import com.google.common.base.Joiner;
-import com.google.common.base.Predicate;
-import com.google.common.base.Predicates;
 import com.google.common.base.Strings;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
@@ -36,6 +35,7 @@ import com.google.common.collect.ImmutableSet;
 import com.google.common.util.concurrent.Futures;
 import com.google.common.util.concurrent.ListenableFuture;
 import com.google.template.soy.SoyFileSetParser;
+import com.google.template.soy.SoyFileSetParser.ParseResult;
 import com.google.template.soy.SoyFileSetParserBuilder;
 import com.google.template.soy.coredirectives.EscapeHtmlDirective;
 import com.google.template.soy.data.LoggingAdvisingAppendable;
@@ -50,6 +50,7 @@ import com.google.template.soy.data.SoyValueConverterUtility;
 import com.google.template.soy.data.internal.BasicParamStore;
 import com.google.template.soy.data.internal.ParamStore;
 import com.google.template.soy.data.restricted.IntegerData;
+import com.google.template.soy.data.restricted.NullData;
 import com.google.template.soy.data.restricted.StringData;
 import com.google.template.soy.error.ErrorReporter;
 import com.google.template.soy.jbcsrc.TemplateTester.CompiledTemplateSubject;
@@ -72,9 +73,11 @@ import com.google.template.soy.soytree.SoyTreeUtils;
 import com.google.template.soy.soytree.TemplateRegistry;
 import java.io.IOException;
 import java.lang.reflect.Field;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.Predicate;
 import javax.annotation.Nullable;
 import org.junit.Test;
 import org.junit.runner.RunWith;
@@ -146,31 +149,32 @@ public class BytecodeCompilerTest {
         SoyFileSetParserBuilder.forFileContents(
                 soyFileContent1, soyFileContent2, soyFileContent3, soyFileContent4)
             .build();
-    SoyFileSetNode soyTree = parser.parse().fileSet();
-    TemplateRegistry templateRegistry = new TemplateRegistry(soyTree, ErrorReporter.exploding());
+    ParseResult parseResult = parser.parse();
     CompiledTemplates templates =
         BytecodeCompiler.compile(
-                templateRegistry,
-                false,
+                parseResult.registry(),
+                parseResult.fileSet(),
+
+                /*developmentMode=*/ false,
                 ErrorReporter.exploding(),
                 parser.soyFileSuppliers(),
                 parser.typeRegistry())
             .get();
     CompiledTemplate.Factory factory = templates.getTemplateFactory("ns1.callerTemplate");
-    Predicate<String> activePackages = Predicates.alwaysFalse();
+    Predicate<String> activePackages = arg -> false;
 
     assertThat(renderWithContext(factory, getDefaultContext(templates, activePackages)))
         .isEqualTo("default");
 
-    activePackages = Predicates.equalTo("SecretFeature");
+    activePackages = "SecretFeature"::equals;
     assertThat(renderWithContext(factory, getDefaultContext(templates, activePackages)))
         .isEqualTo("SecretFeature aaaaaah");
 
-    activePackages = Predicates.equalTo("AlternateSecretFeature");
+    activePackages = "AlternateSecretFeature"::equals;
     assertThat(renderWithContext(factory, getDefaultContext(templates, activePackages)))
         .isEqualTo("AlternateSecretFeature aaaaaah");
 
-    activePackages = Predicates.equalTo("NonexistentFeature");
+    activePackages = "NonexistentFeature"::equals;
     assertThat(renderWithContext(factory, getDefaultContext(templates, activePackages)))
         .isEqualTo("default");
   }
@@ -197,12 +201,13 @@ public class BytecodeCompilerTest {
         SoyFileSetParserBuilder.forFileContents(soyFileContent)
             .addHtmlAttributesForDebugging(true)
             .build();
-    SoyFileSetNode soyTree = parser.parse().fileSet();
-    TemplateRegistry templateRegistry = new TemplateRegistry(soyTree, ErrorReporter.exploding());
+    ParseResult parseResult = parser.parse();
     CompiledTemplates templates =
         BytecodeCompiler.compile(
-                templateRegistry,
-                false,
+                parseResult.registry(),
+                parseResult.fileSet(),
+
+                /*developmentMode=*/ false,
                 ErrorReporter.exploding(),
                 parser.soyFileSuppliers(),
                 parser.typeRegistry())
@@ -370,6 +375,25 @@ public class BytecodeCompilerTest {
         .containsExactly("ns.callee");
   }
 
+  @Test
+  public void testMsg() throws IOException {
+    CompiledTemplates templates =
+        TemplateTester.compileFile(
+            "{namespace ns}",
+            "",
+            "{template .msg}",
+            "  {msg desc='description'}",
+            "    {call .t data='all' /}",
+            "  {/msg}",
+            "{/template}",
+            "",
+            "{template .t}",
+            "  foobar",
+            "{/template}");
+
+    assertThat(render(templates, ParamStore.EMPTY_INSTANCE, "ns.msg")).isEqualTo("foobar");
+  }
+
   private static TemplateMetadata getTemplateMetadata(CompiledTemplates templates, String name) {
     return templates
         .getTemplateFactory(name)
@@ -458,6 +482,18 @@ public class BytecodeCompilerTest {
             "{/for}")
         .rendersAs(
             "123", ImmutableMap.of("map", ImmutableMap.of("key", ImmutableList.of(1, 2, 3))));
+  }
+
+  @Test
+  public void testStateNodeNumber() {
+    assertThatElementBody("{@state foo: number= 1}", "<a>{$foo}</a>").rendersAs("<a>1</a>");
+    assertThatElementBody("{@state foo:= 1}", "<p>{$foo}</p>").rendersAs("<p>1</p>");
+  }
+
+  @Test
+  public void testStateNodeBoolean() {
+    assertThatElementBody("{@state foo:= 1}", "<p>{if $foo}1{else}0{/if}</p>")
+        .rendersAs("<p>1</p>");
   }
 
   @Test
@@ -676,8 +712,8 @@ public class BytecodeCompilerTest {
 
   @Test
   public void testPrintDirectives() {
-    assertThatTemplateBody("{' blah &&blahblahblah' |escapeHtml|insertWordBreaks:8}")
-        .rendersAs(" blah &amp;&amp;blahbl<wbr>ahblah");
+    assertThatTemplateBody("{' blah aablahblahblah' |insertWordBreaks:8}")
+        .rendersAs(" blah aablahbl<wbr>ahblah");
   }
 
   @Test
@@ -692,10 +728,8 @@ public class BytecodeCompilerTest {
   public void testParam_headerDocParam() {
     assertThatFile(
             "{namespace ns}",
-            "/** ",
-            " * @param foo A foo",
-            "*/ ",
             "{template .foo}",
+            "  {@param foo: ?}  /** A foo */",
             "  {$foo + 1}",
             "{/template}",
             "")
@@ -707,17 +741,25 @@ public class BytecodeCompilerTest {
   @Test
   public void testInjectParam() {
     assertThatTemplateBody("{@inject foo : int }", "{$foo + 1}")
-        .rendersAs("2", ImmutableMap.<String, Object>of(), ImmutableMap.of("foo", 1))
-        .rendersAs("3", ImmutableMap.<String, Object>of(), ImmutableMap.of("foo", 2))
-        .rendersAs("4", ImmutableMap.<String, Object>of(), ImmutableMap.of("foo", 3));
+        .rendersAs("2", ImmutableMap.of(), ImmutableMap.of("foo", 1))
+        .rendersAs("3", ImmutableMap.of(), ImmutableMap.of("foo", 2))
+        .rendersAs("4", ImmutableMap.of(), ImmutableMap.of("foo", 3));
   }
 
   @Test
-  public void testInjectParam_legacyIj() {
-    assertThatTemplateBody("{$ij.foo + 1}")
-        .rendersAs("2", ImmutableMap.<String, Object>of(), ImmutableMap.of("foo", 1))
-        .rendersAs("3", ImmutableMap.<String, Object>of(), ImmutableMap.of("foo", 2))
-        .rendersAs("4", ImmutableMap.<String, Object>of(), ImmutableMap.of("foo", 3));
+  public void testDefaultParam() {
+    assertThatTemplateBody("{@param default:= 18}", "{$default}")
+        .rendersAs("18", ImmutableMap.of())
+        .rendersAs("-12", ImmutableMap.of("default", -12));
+
+    // This can't be an ImmutableMap because they don't allow null values.
+    Map<String, Object> nullValue = new HashMap<>();
+    nullValue.put("nullable", null);
+    assertThatTemplateBody("{@param nullable : null|string = 'default'}", "{$nullable}")
+        .rendersAs("default", ImmutableMap.of())
+        .rendersAs("override", ImmutableMap.of("nullable", "override"))
+        .rendersAs("null", nullValue)
+        .rendersAs("null", ImmutableMap.of("nullable", NullData.INSTANCE));
   }
 
   @Test
@@ -760,7 +802,8 @@ public class BytecodeCompilerTest {
                 "{@param foo : string}",
                 "{@param baz : string}",
                 "{@inject bar : string}",
-                "{$foo + $baz + $bar}")
+                "{@param defaultP:= 'orange'}",
+                "{$foo + $baz + $bar + $defaultP}")
             .getTemplateFactory("ns.foo");
     SoyDict params =
         SoyValueConverterUtility.newDict(
@@ -771,6 +814,16 @@ public class BytecodeCompilerTest {
     assertThat(getField("foo", template)).isEqualTo(StringData.forValue("foo"));
     assertThat(getField("bar", template)).isEqualTo(StringData.forValue("bar"));
     assertThat(getField("baz", template)).isEqualTo(StringData.forValue("baz"));
+    assertThat(getField("defaultP", template)).isEqualTo(StringData.forValue("orange"));
+
+    SoyDict overrideParam =
+        SoyValueConverterUtility.newDict(
+            "foo", StringData.forValue("foo"),
+            "bar", StringData.forValue("bar"),
+            "baz", StringData.forValue("baz"),
+            "defaultP", StringData.forValue("green"));
+    template = multipleParams.create(overrideParam, overrideParam);
+    assertThat(getField("defaultP", template)).isEqualTo(StringData.forValue("green"));
 
     TemplateMetadata templateMetadata = template.getClass().getAnnotation(TemplateMetadata.class);
     assertThat(templateMetadata.injectedParams()).asList().containsExactly("bar");
@@ -791,7 +844,7 @@ public class BytecodeCompilerTest {
             "{namespace ns}",
             "{template .foo}",
             "  {@param? content : string}",
-            "  {$content ?: 'empty' |escapeHtml}",
+            "  {$content ?: 'empty'}",
             "{/template}");
     subject.rendersAs("empty");
     subject.rendersAs(
@@ -838,23 +891,7 @@ public class BytecodeCompilerTest {
     } catch (IllegalArgumentException expected) {
     }
     // we can still access metadata
-    assertThat(templates.getTemplateContentKind("ns.foo")).hasValue(ContentKind.HTML);
-  }
-
-  @Test
-  public void testContentKindNonStrict() {
-    assertThat(
-            TemplateTester.compileFile(
-                    "{namespace ns}",
-                    "/** foo */",
-                    "{template .foo autoescape=\"deprecated-contextual\"}",
-                    "{/template}")
-                .getTemplateFactory("ns.foo")
-                .getClass()
-                .getDeclaringClass()
-                .getAnnotation(TemplateMetadata.class)
-                .contentKind())
-        .isEmpty();
+    assertThat(templates.getTemplateContentKind("ns.foo")).isEqualTo(ContentKind.HTML);
   }
 
   @Test
@@ -937,16 +974,19 @@ public class BytecodeCompilerTest {
                 "{/template}",
                 "");
     SoyFileSetParser parser = SoyFileSetParserBuilder.forFileContents(soyFileContent1).build();
-    SoyFileSetNode soyTree = parser.parse().fileSet();
+    ParseResult parseResult = parser.parse();
+    SoyFileSetNode soyTree = parseResult.fileSet();
+    TemplateRegistry templateRegistry = parseResult.registry();
     // apply an escaping directive to the callsite, just like the autoescaper would
     CallDelegateNode cdn =
         SoyTreeUtils.getAllNodesOfType(soyTree.getChild(0), CallDelegateNode.class).get(0);
     cdn.setEscapingDirectives(ImmutableList.of(new EscapeHtmlDirective()));
-    TemplateRegistry templateRegistry = new TemplateRegistry(soyTree, ErrorReporter.exploding());
     CompiledTemplates templates =
         BytecodeCompiler.compile(
                 templateRegistry,
-                false,
+                soyTree,
+
+                /*developmentMode=*/ false,
                 ErrorReporter.exploding(),
                 parser.soyFileSuppliers(),
                 parser.typeRegistry())
@@ -1143,12 +1183,12 @@ public class BytecodeCompilerTest {
 
   private CompiledTemplates compileFiles(String... soyFileContents) {
     SoyFileSetParser parser = SoyFileSetParserBuilder.forFileContents(soyFileContents).build();
-    SoyFileSetNode soyTree = parser.parse().fileSet();
-    TemplateRegistry templateRegistry = new TemplateRegistry(soyTree, ErrorReporter.exploding());
+    ParseResult parseResult = parser.parse();
     CompiledTemplates templates =
         BytecodeCompiler.compile(
-                templateRegistry,
-                false,
+                parseResult.registry(),
+                parseResult.fileSet(),
+                /*developmentMode=*/ false,
                 ErrorReporter.exploding(),
                 parser.soyFileSuppliers(),
                 parser.typeRegistry())

@@ -21,7 +21,13 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.Set;
 
-/** A soy function that carries type information. */
+/**
+ * A soy function that carries type information.
+ *
+ * @deprecated New functions should use {@code SoyJavaSourceFunction}, {@code
+ *     SoyJavaScriptSourceFunction} and {@code SoyPythonSourceFunction} instead of this.
+ */
+@Deprecated
 public abstract class TypedSoyFunction implements SoyFunction {
 
   @Override

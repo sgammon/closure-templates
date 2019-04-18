@@ -17,20 +17,21 @@
 package com.google.template.soy.basicfunctions;
 
 import com.google.template.soy.data.SoyValue;
-import com.google.template.soy.jssrc.restricted.JsExpr;
-import com.google.template.soy.jssrc.restricted.JsExprUtils;
-import com.google.template.soy.jssrc.restricted.SoyJsSrcFunction;
 import com.google.template.soy.plugin.java.restricted.JavaPluginContext;
 import com.google.template.soy.plugin.java.restricted.JavaValue;
 import com.google.template.soy.plugin.java.restricted.JavaValueFactory;
 import com.google.template.soy.plugin.java.restricted.SoyJavaSourceFunction;
-import com.google.template.soy.pysrc.restricted.PyExpr;
-import com.google.template.soy.pysrc.restricted.PyStringExpr;
-import com.google.template.soy.pysrc.restricted.SoyPySrcFunction;
+import com.google.template.soy.plugin.javascript.restricted.JavaScriptPluginContext;
+import com.google.template.soy.plugin.javascript.restricted.JavaScriptValue;
+import com.google.template.soy.plugin.javascript.restricted.JavaScriptValueFactory;
+import com.google.template.soy.plugin.javascript.restricted.SoyJavaScriptSourceFunction;
+import com.google.template.soy.plugin.python.restricted.PythonPluginContext;
+import com.google.template.soy.plugin.python.restricted.PythonValue;
+import com.google.template.soy.plugin.python.restricted.PythonValueFactory;
+import com.google.template.soy.plugin.python.restricted.SoyPythonSourceFunction;
 import com.google.template.soy.shared.restricted.Signature;
 import com.google.template.soy.shared.restricted.SoyFunctionSignature;
 import com.google.template.soy.shared.restricted.SoyPureFunction;
-import com.google.template.soy.shared.restricted.TypedSoyFunction;
 import java.lang.reflect.Method;
 import java.util.List;
 
@@ -52,43 +53,29 @@ import java.util.List;
     value = {
       @Signature(
           returnType = "string",
-          // TODO(b/62134073): should be string, int
-          parameterTypes = {"?", "?"}),
+          parameterTypes = {"string", "int"}),
       @Signature(
           returnType = "string",
-          // TODO(b/62134073): should be string, int, int
-          parameterTypes = {"?", "?", "?"}),
+          parameterTypes = {"string", "int", "int"}),
     })
 @SoyPureFunction
-final class StrSubFunction extends TypedSoyFunction
-    implements SoyJavaSourceFunction, SoyJsSrcFunction, SoyPySrcFunction {
+final class StrSubFunction
+    implements SoyJavaSourceFunction, SoyJavaScriptSourceFunction, SoyPythonSourceFunction {
 
   @Override
-  public JsExpr computeForJsSrc(List<JsExpr> args) {
-    // Coerce SanitizedContent args to strings.
-    String arg0 = JsExprUtils.toString(args.get(0)).getText();
-    JsExpr arg1 = args.get(1);
-    JsExpr arg2 = args.size() == 3 ? args.get(2) : null;
-
-    return new JsExpr(
-        "("
-            + arg0
-            + ").substring("
-            + arg1.getText()
-            + (arg2 != null ? "," + arg2.getText() : "")
-            + ")",
-        Integer.MAX_VALUE);
+  public JavaScriptValue applyForJavaScriptSource(
+      JavaScriptValueFactory factory, List<JavaScriptValue> args, JavaScriptPluginContext context) {
+    return args.get(0)
+        .coerceToString()
+        .invokeMethod("substring", args.subList(1, args.size()).toArray(new JavaScriptValue[0]));
   }
 
   @Override
-  public PyExpr computeForPySrc(List<PyExpr> args) {
+  public PythonValue applyForPythonSource(
+      PythonValueFactory factory, List<PythonValue> args, PythonPluginContext context) {
     // Coerce SanitizedContent args to strings.
-    String base = args.get(0).toPyString().getText();
-    PyExpr start = args.get(1);
-    PyExpr end = args.size() == 3 ? args.get(2) : null;
-
-    return new PyStringExpr(
-        "(" + base + ")[" + start.getText() + ":" + (end != null ? end.getText() : "") + "]");
+    PythonValue str = args.get(0).coerceToString();
+    return str.slice(args.get(1), args.size() == 3 ? args.get(2) : null);
   }
 
   // lazy singleton pattern, allows other backends to avoid the work.

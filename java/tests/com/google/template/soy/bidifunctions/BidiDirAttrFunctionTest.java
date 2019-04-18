@@ -18,19 +18,14 @@ package com.google.template.soy.bidifunctions;
 
 import static com.google.common.truth.Truth.assertThat;
 
-import com.google.common.base.Suppliers;
-import com.google.common.collect.ImmutableList;
 import com.google.template.soy.data.Dir;
 import com.google.template.soy.data.SanitizedContent;
 import com.google.template.soy.data.SanitizedContent.ContentKind;
 import com.google.template.soy.data.SanitizedContents;
+import com.google.template.soy.data.UnsafeSanitizedContentOrdainer;
 import com.google.template.soy.data.restricted.StringData;
 import com.google.template.soy.internal.i18n.BidiGlobalDir;
-import com.google.template.soy.jssrc.restricted.JsExpr;
 import com.google.template.soy.plugin.java.restricted.testing.SoyJavaSourceFunctionTester;
-import com.google.template.soy.pysrc.restricted.PyExpr;
-import com.google.template.soy.pysrc.restricted.PyStringExpr;
-import com.google.template.soy.shared.SharedRestrictedTestUtils;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
@@ -49,22 +44,25 @@ public class BidiDirAttrFunctionTest {
     SanitizedContent rtl = SanitizedContents.constantAttributes("dir=\"rtl\"");
 
     // the java source version doesn't use the provider
-    BidiDirAttrFunction fn =
-        new BidiDirAttrFunction(
-            () -> {
-              throw new UnsupportedOperationException();
-            });
+    BidiDirAttrFunction fn = new BidiDirAttrFunction();
     SoyJavaSourceFunctionTester tester =
         new SoyJavaSourceFunctionTester.Builder(fn).withBidiGlobalDir(BidiGlobalDir.LTR).build();
     assertThat(tester.callFunction(StringData.EMPTY_STRING)).isEqualTo(empty);
     assertThat(tester.callFunction(StringData.forValue("a"))).isEqualTo(empty);
     assertThat(tester.callFunction(StringData.forValue("\u05E0"))).isEqualTo(rtl);
     assertThat(tester.callFunction(SanitizedContents.unsanitizedText("\u05E0"))).isEqualTo(rtl);
-    assertThat(tester.callFunction(SanitizedContents.unsanitizedText("\u05E0", Dir.RTL)))
+    assertThat(
+            tester.callFunction(
+                UnsafeSanitizedContentOrdainer.ordainAsSafe("\u05E0", ContentKind.HTML, Dir.RTL)))
         .isEqualTo(rtl);
-    assertThat(tester.callFunction(SanitizedContents.unsanitizedText("\u05E0", Dir.LTR)))
+    assertThat(
+            tester.callFunction(
+                UnsafeSanitizedContentOrdainer.ordainAsSafe("\u05E0", ContentKind.HTML, Dir.LTR)))
         .isEqualTo(empty);
-    assertThat(tester.callFunction(SanitizedContents.unsanitizedText("\u05E0", Dir.NEUTRAL)))
+    assertThat(
+            tester.callFunction(
+                UnsafeSanitizedContentOrdainer.ordainAsSafe(
+                    "\u05E0", ContentKind.HTML, Dir.NEUTRAL)))
         .isEqualTo(empty);
 
     tester =
@@ -73,50 +71,17 @@ public class BidiDirAttrFunctionTest {
     assertThat(tester.callFunction(StringData.forValue("\u05E0"))).isEqualTo(empty);
     assertThat(tester.callFunction(StringData.forValue("a"))).isEqualTo(ltr);
     assertThat(tester.callFunction(SanitizedContents.unsanitizedText("a"))).isEqualTo(ltr);
-    assertThat(tester.callFunction(SanitizedContents.unsanitizedText("a", Dir.LTR))).isEqualTo(ltr);
-    assertThat(tester.callFunction(SanitizedContents.unsanitizedText("a", Dir.RTL)))
+    assertThat(
+            tester.callFunction(
+                UnsafeSanitizedContentOrdainer.ordainAsSafe("a", ContentKind.HTML, Dir.LTR)))
+        .isEqualTo(ltr);
+    assertThat(
+            tester.callFunction(
+                UnsafeSanitizedContentOrdainer.ordainAsSafe("a", ContentKind.HTML, Dir.RTL)))
         .isEqualTo(empty);
-    assertThat(tester.callFunction(SanitizedContents.unsanitizedText("a", Dir.NEUTRAL)))
+    assertThat(
+            tester.callFunction(
+                UnsafeSanitizedContentOrdainer.ordainAsSafe("a", ContentKind.HTML, Dir.NEUTRAL)))
         .isEqualTo(empty);
-  }
-
-  @Test
-  public void testComputeForJsSrc() {
-    BidiDirAttrFunction codeSnippet =
-        new BidiDirAttrFunction(
-            SharedRestrictedTestUtils.BIDI_GLOBAL_DIR_FOR_JS_ISRTL_CODE_SNIPPET_SUPPLIER);
-    BidiDirAttrFunction ltr = new BidiDirAttrFunction(Suppliers.ofInstance(BidiGlobalDir.LTR));
-    BidiDirAttrFunction rtl = new BidiDirAttrFunction(Suppliers.ofInstance(BidiGlobalDir.RTL));
-
-    JsExpr textExpr = new JsExpr("TEXT_JS_CODE", Integer.MAX_VALUE);
-    assertThat(ltr.computeForJsSrc(ImmutableList.of(textExpr)))
-        .isEqualTo(new JsExpr("soy.$$bidiDirAttr(1, TEXT_JS_CODE)", Integer.MAX_VALUE));
-    assertThat(codeSnippet.computeForJsSrc(ImmutableList.of(textExpr)))
-        .isEqualTo(new JsExpr("soy.$$bidiDirAttr(IS_RTL?-1:1, TEXT_JS_CODE)", Integer.MAX_VALUE));
-
-    JsExpr isHtmlExpr = new JsExpr("IS_HTML_JS_CODE", Integer.MAX_VALUE);
-    assertThat(rtl.computeForJsSrc(ImmutableList.of(textExpr, isHtmlExpr)))
-        .isEqualTo(
-            new JsExpr("soy.$$bidiDirAttr(-1, TEXT_JS_CODE, IS_HTML_JS_CODE)", Integer.MAX_VALUE));
-    assertThat(codeSnippet.computeForJsSrc(ImmutableList.of(textExpr, isHtmlExpr)))
-        .isEqualTo(
-            new JsExpr(
-                "soy.$$bidiDirAttr(IS_RTL?-1:1, TEXT_JS_CODE, IS_HTML_JS_CODE)",
-                Integer.MAX_VALUE));
-  }
-
-  @Test
-  public void testComputeForPySrc() {
-    BidiDirAttrFunction codeSnippet =
-        new BidiDirAttrFunction(
-            SharedRestrictedTestUtils.BIDI_GLOBAL_DIR_FOR_PY_ISRTL_CODE_SNIPPET_SUPPLIER);
-
-    PyExpr textExpr = new PyStringExpr("'data'", Integer.MAX_VALUE);
-    assertThat(codeSnippet.computeForPySrc(ImmutableList.of(textExpr)).getText())
-        .isEqualTo("bidi.dir_attr(-1 if IS_RTL else 1, 'data')");
-
-    PyExpr isHtmlExpr = new PyExpr("is_html", Integer.MAX_VALUE);
-    assertThat(codeSnippet.computeForPySrc(ImmutableList.of(textExpr, isHtmlExpr)).getText())
-        .isEqualTo("bidi.dir_attr(-1 if IS_RTL else 1, 'data', is_html)");
   }
 }

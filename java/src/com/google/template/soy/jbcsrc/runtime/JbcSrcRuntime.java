@@ -16,6 +16,8 @@
 
 package com.google.template.soy.jbcsrc.runtime;
 
+import static com.google.common.base.Preconditions.checkNotNull;
+
 import com.google.common.base.Function;
 import com.google.common.collect.HashMultimap;
 import com.google.common.collect.HashMultiset;
@@ -36,6 +38,7 @@ import com.google.template.soy.data.SoyProtoValue;
 import com.google.template.soy.data.SoyRecord;
 import com.google.template.soy.data.SoyValue;
 import com.google.template.soy.data.SoyValueProvider;
+import com.google.template.soy.data.SoyVisualElementData;
 import com.google.template.soy.data.UnsafeSanitizedContentOrdainer;
 import com.google.template.soy.data.restricted.IntegerData;
 import com.google.template.soy.data.restricted.NullData;
@@ -147,15 +150,25 @@ public final class JbcSrcRuntime {
    * Helper function to make SoyRecord.getFieldProvider a non-nullable function by returning {@link
    * #NULL_PROVIDER} for missing fields.
    */
-  public static SoyValueProvider getFieldProvider(SoyRecord record, String field) {
-    if (record == null) {
-      throw new NullPointerException("Attempted to access field '" + field + "' of null");
-    }
+  public static SoyValueProvider getFieldProvider(
+      SoyRecord record, String field, @Nullable SoyValue defaultValue) {
+    checkNotNull(record, "Attempted to access field '%s' of null", field);
     // TODO(lukes): ideally this would be the behavior of getFieldProvider, but Tofu relies on it
     // returning null to interpret it as 'undefined'. http://b/20537225 describes the issues in Tofu
     SoyValueProvider provider = record.getFieldProvider(field);
-    // | instead of || avoids a branch
-    return (provider == null | provider instanceof NullData) ? NULL_PROVIDER : provider;
+    if (provider == null) {
+      if (defaultValue == null) {
+        return NULL_PROVIDER;
+      }
+      return defaultValue;
+    } else if (provider instanceof NullData) {
+      return NULL_PROVIDER;
+    }
+    return provider;
+  }
+
+  public static SoyValueProvider getFieldProvider(SoyRecord record, String field) {
+    return getFieldProvider(record, field, /* defaultValue= */ null);
   }
 
   /**
@@ -693,7 +706,7 @@ public final class JbcSrcRuntime {
                 ? StringData.forValue(buffer.toString())
                 : UnsafeSanitizedContentOrdainer.ordainAsSafe(buffer.toString(), kind);
         for (SoyJavaPrintDirective directive : directives) {
-          resultData = directive.applyForJava(resultData, ImmutableList.<SoyValue>of());
+          resultData = directive.applyForJava(resultData, ImmutableList.of());
         }
         appendable.append(resultData.coerceToString());
       }
@@ -746,5 +759,9 @@ public final class JbcSrcRuntime {
         c.close();
       }
     }
+  }
+
+  public static LogStatement createLogStatement(SoyVisualElementData veData, boolean logOnly) {
+    return LogStatement.create(veData.ve().id(), veData.data(), logOnly);
   }
 }

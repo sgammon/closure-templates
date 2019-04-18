@@ -61,8 +61,8 @@ public final class SoyTreeUtilsTest {
     String testFileContent =
         "{namespace boo}\n"
             + "\n"
-            + "/** @param items */\n"
             + "{template .foo}\n"
+            + "  {@param items: ?}\n"
             + "  {length($items) + 5}\n" // 5 nodes
             + "  {for $item in $items}\n" // 2 nodes
             + "    {$item.goo}\n" // 3 nodes
@@ -125,7 +125,7 @@ public final class SoyTreeUtilsTest {
           .join(
               "{namespace ns}",
               "/** example for cloning. */",
-              "{template .ex1 autoescape=\"deprecated-contextual\" visibility=\"private\"}",
+              "{template .ex1 visibility=\"private\"}",
               "  {@param a : ?}",
               "  {@param b : ?}",
               "  {@param c : ?}",
@@ -140,7 +140,7 @@ public final class SoyTreeUtilsTest {
               "  {@param foo : ?}",
               "  Hello, World!",
               "  {lb}{call .foo data=\"all\"}{param x: $x /}{/call}{rb}",
-              "  {$x |escapeHtml}",
+              "  {$x}",
               "  {if $cond0}",
               "    {$a}",
               "  {elseif $cond1}",
@@ -163,7 +163,7 @@ public final class SoyTreeUtilsTest {
               "    {for $item in $items}",
               "      <li>{$item}</li>",
               "    {ifempty}",
-              "      <li><i>Nothing to see here!",
+              "      <li><i>Nothing to see here!</i>",
               "    {/for}",
               "  </ol>",
               "  {let $local : 'foo' /}",

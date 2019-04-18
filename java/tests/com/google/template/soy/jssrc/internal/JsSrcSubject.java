@@ -31,15 +31,16 @@ import com.google.errorprone.annotations.ForOverride;
 import com.google.template.soy.SoyFileSetParser.ParseResult;
 import com.google.template.soy.SoyFileSetParserBuilder;
 import com.google.template.soy.base.internal.UniqueNameGenerator;
-import com.google.template.soy.basetree.SyntaxVersion;
 import com.google.template.soy.error.ErrorReporter;
 import com.google.template.soy.error.SoyError;
 import com.google.template.soy.exprtree.ExprNode;
 import com.google.template.soy.exprtree.Operator;
+import com.google.template.soy.internal.i18n.BidiGlobalDir;
 import com.google.template.soy.jssrc.SoyJsSrcOptions;
 import com.google.template.soy.jssrc.dsl.CodeChunk;
 import com.google.template.soy.jssrc.dsl.CodeChunk.RequiresCollector;
 import com.google.template.soy.jssrc.dsl.Expression;
+import com.google.template.soy.logging.ValidatedLoggingConfig;
 import com.google.template.soy.shared.SharedTestUtils;
 import com.google.template.soy.shared.SoyGeneralOptions;
 import com.google.template.soy.shared.restricted.SoyFunction;
@@ -60,13 +61,11 @@ abstract class JsSrcSubject<T extends Subject<T, String>> extends Subject<T, Str
 
   private static final Joiner JOINER = Joiner.on('\n');
 
-  private static final Subject.Factory<ForFile, String> TEMPLATE_FACTORY = ForFile::new;
-
-  private static final Subject.Factory<ForExprs, String> EXPR_FACTORY = ForExprs::new;
-
   private final SoyGeneralOptions generalOptions = new SoyGeneralOptions().disableOptimizer();
   SoyJsSrcOptions jsSrcOptions = new SoyJsSrcOptions();
   private SoyTypeRegistry typeRegistry = new SoyTypeRegistry();
+  private ValidatedLoggingConfig loggingConfig = ValidatedLoggingConfig.EMPTY;
+  private ImmutableList<String> experimentalFeatures = ImmutableList.of();
   ErrorReporter errorReporter = ErrorReporter.exploding();
   private final List<SoyFunction> soyFunctions = new ArrayList<>();
 
@@ -75,12 +74,12 @@ abstract class JsSrcSubject<T extends Subject<T, String>> extends Subject<T, Str
   }
 
   static ForFile assertThatSoyFile(String... lines) {
-    return assertAbout(TEMPLATE_FACTORY).that(JOINER.join(lines));
+    return assertAbout(ForFile::new).that(JOINER.join(lines));
   }
 
   static ForFile assertThatTemplateBody(String... lines) {
     String templateBody = JOINER.join(lines);
-    return assertAbout(TEMPLATE_FACTORY)
+    return assertAbout(ForFile::new)
         .that("{namespace ns}\n" + "{template .aaa}\n" + templateBody + "{/template}\n");
   }
 
@@ -93,7 +92,7 @@ abstract class JsSrcSubject<T extends Subject<T, String>> extends Subject<T, Str
   }
 
   static ForExprs assertThatSoyExpr(TestExpr build) {
-    return assertAbout(EXPR_FACTORY).that(build.buildTemplateThatContainsOneExpression());
+    return assertAbout(ForExprs::new).that(build.buildTemplateThatContainsOneExpression());
   }
 
   static TestExpr expr(String... lines) {
@@ -140,9 +139,13 @@ abstract class JsSrcSubject<T extends Subject<T, String>> extends Subject<T, Str
     return typedThis();
   }
 
-  @CheckReturnValue
-  T withDeclaredSyntaxVersion(SyntaxVersion version) {
-    this.generalOptions.setDeclaredSyntaxVersionName(version.name);
+  T withLoggingConfig(ValidatedLoggingConfig loggingConfig) {
+    this.loggingConfig = loggingConfig;
+    return typedThis();
+  }
+
+  T withExperimentalFeatures(ImmutableList<String> experimetalFeatures) {
+    this.experimentalFeatures = experimetalFeatures;
     return typedThis();
   }
 
@@ -156,8 +159,11 @@ abstract class JsSrcSubject<T extends Subject<T, String>> extends Subject<T, Str
     SoyFileSetParserBuilder builder =
         SoyFileSetParserBuilder.forFileContents(actual())
             .allowUnboundGlobals(true)
+            .allowV1Expression(true)
             .typeRegistry(typeRegistry)
-            .options(generalOptions);
+            .options(generalOptions)
+            .setLoggingConfig(loggingConfig)
+            .enableExperimentalFeatures(experimentalFeatures);
     for (SoyFunction soyFunction : soyFunctions) {
       builder.addSoyFunction(soyFunction);
     }
@@ -184,7 +190,8 @@ abstract class JsSrcSubject<T extends Subject<T, String>> extends Subject<T, Str
     private String file;
     private SoyFileNode fileNode;
     private final GenJsCodeVisitor visitor =
-        JsSrcMain.createVisitor(jsSrcOptions, new SoyTypeRegistry());
+        JsSrcMain.createVisitor(
+            jsSrcOptions, new SoyTypeRegistry(), BidiGlobalDir.LTR, ErrorReporter.exploding());
 
     private ForFile(FailureMetadata failureMetadata, String expr) {
       super(failureMetadata, expr);
@@ -248,6 +255,8 @@ abstract class JsSrcSubject<T extends Subject<T, String>> extends Subject<T, Str
       UniqueNameGenerator nameGenerator = JsSrcNameGenerators.forLocalVariables();
       this.chunk =
           new TranslateExprNodeVisitor(
+                  new JavaScriptValueFactoryImpl(
+                      new SoyJsSrcOptions(), BidiGlobalDir.LTR, ErrorReporter.exploding()),
                   TranslationContext.of(
                       SoyToJsVariableMappings.startingWith(initialLocalVarTranslations),
                       CodeChunk.Generator.create(nameGenerator),

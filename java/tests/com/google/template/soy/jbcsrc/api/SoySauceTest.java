@@ -29,6 +29,7 @@ import com.google.template.soy.data.SanitizedContent.ContentKind;
 import com.google.template.soy.data.SanitizedContents;
 import com.google.template.soy.data.SoyValueProvider;
 import com.google.template.soy.data.restricted.IntegerData;
+import com.google.template.soy.data.restricted.NullData;
 import com.google.template.soy.jbcsrc.api.SoySauce.Continuation;
 import com.google.template.soy.jbcsrc.api.SoySauce.WriteContinuation;
 import com.google.template.soy.jbcsrc.runtime.DetachableSoyValueProvider;
@@ -48,7 +49,6 @@ public class SoySauceTest {
   public void setUp() throws Exception {
     SoyFileSet.Builder builder = SoyFileSet.builder();
     builder.add(SoySauceTest.class.getResource("strict.soy"));
-    builder.add(SoySauceTest.class.getResource("non_strict.soy"));
     sauce = builder.build().compileTemplates();
   }
 
@@ -121,43 +121,6 @@ public class SoySauceTest {
                 .render()
                 .get())
         .isEqualTo("'Hello world'");
-  }
-
-  @Test
-  public void testNonStrictContentHandling() {
-    assertThat(sauce.renderTemplate("nonstrict_test.hello").render().get())
-        .isEqualTo("Hello world");
-    assertEquals(
-        "Hello world",
-        sauce
-            .renderTemplate("nonstrict_test.hello")
-            .setExpectedContentKind(ContentKind.TEXT) // text is always fine
-            .render()
-            .get());
-    assertEquals(
-        SanitizedContents.unsanitizedText("Hello world"),
-        sauce
-            .renderTemplate("nonstrict_test.hello")
-            .setExpectedContentKind(ContentKind.TEXT) // text is always fine, even with renderStrict
-            .renderStrict()
-            .get());
-    try {
-      sauce.renderTemplate("nonstrict_test.hello").renderStrict();
-      fail();
-    } catch (IllegalStateException e) {
-      assertThat(e)
-          .hasMessageThat()
-          .isEqualTo("Cannot render a non strict template 'nonstrict_test.hello' as 'html'");
-    }
-
-    try {
-      sauce.renderTemplate("nonstrict_test.hello").setExpectedContentKind(ContentKind.JS).render();
-      fail();
-    } catch (IllegalStateException e) {
-      assertThat(e)
-          .hasMessageThat()
-          .isEqualTo("Cannot render a non strict template 'nonstrict_test.hello' as 'js'");
-    }
   }
 
   @Test
@@ -236,6 +199,15 @@ public class SoySauceTest {
             .isEqualTo("strict_test.callsItself.render(strict.soy:34)");
       }
     }
+  }
+
+  /** Tests that a parameter set to {@code NullData} doesn't trigger the default parameter logic. */
+  @Test
+  public void testDefaultParam() {
+    SoySauce.Renderer tmpl = sauce.renderTemplate("strict_test.defaultParam");
+
+    assertThat(tmpl.setData(ImmutableMap.of("p", NullData.INSTANCE)).render().get())
+        .isEqualTo("null");
   }
 
   private static final class TestAppendable implements AdvisingAppendable {

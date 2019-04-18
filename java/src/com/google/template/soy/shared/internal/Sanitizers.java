@@ -28,7 +28,6 @@ import com.google.common.escape.Escaper;
 import com.google.common.net.PercentEscaper;
 import com.google.common.primitives.Chars;
 import com.google.template.soy.data.Dir;
-import com.google.template.soy.data.ForwardingLoggingAdvisingAppendable;
 import com.google.template.soy.data.LogStatement;
 import com.google.template.soy.data.LoggingAdvisingAppendable;
 import com.google.template.soy.data.LoggingFunctionInvocation;
@@ -87,7 +86,7 @@ public final class Sanitizers {
    *     ContentKind#HTML}
    */
   public static SanitizedContent cleanHtml(SoyValue value) {
-    return cleanHtml(value, ImmutableSet.<OptionalSafeTag>of());
+    return cleanHtml(value, ImmutableSet.of());
   }
 
   /**
@@ -199,7 +198,7 @@ public final class Sanitizers {
    *     ContentKind#HTML}
    */
   public static SanitizedContent cleanHtml(String value) {
-    return cleanHtml(value, ImmutableSet.<OptionalSafeTag>of());
+    return cleanHtml(value, ImmutableSet.of());
   }
 
   /**
@@ -335,6 +334,22 @@ public final class Sanitizers {
   }
 
   /**
+   * Escapes HTML special characters in an HTML attribute value containing HTML code, such as {@code
+   * <iframe srcdoc>}.
+   */
+  public static String escapeHtmlHtmlAttribute(SoyValue value) {
+    return escapeHtml(value);
+  }
+
+  /**
+   * Escapes HTML special characters in an HTML attribute value containing HTML code, such as {@code
+   * <iframe srcdoc>}.
+   */
+  public static String escapeHtmlHtmlAttribute(String value) {
+    return escapeHtml(value);
+  }
+
+  /**
    * Converts plain text to HTML by entity escaping, stripping tags in sanitized content so the
    * result can safely be embedded in an unquoted HTML attribute value.
    */
@@ -353,6 +368,19 @@ public final class Sanitizers {
    */
   public static String escapeHtmlAttributeNospace(String value) {
     return EscapingConventions.EscapeHtmlNospace.INSTANCE.escape(value);
+  }
+
+  /** Filters decimal and floating-point numbers. */
+  public static String filterNumber(SoyValue value) {
+    return filterNumber(value.coerceToString());
+  }
+
+  /** Filters decimal and floating-point numbers. */
+  public static String filterNumber(String value) {
+    if (!value.matches("\\d*\\.?\\d+")) {
+      return EscapingConventions.INNOCUOUS_OUTPUT;
+    }
+    return value;
   }
 
   /** Converts the input to the body of a JavaScript string by using {@code \n} style escapes. */
@@ -560,6 +588,19 @@ public final class Sanitizers {
     }
     logger.log(Level.WARNING, "|filterNormalizeMediaUri received bad value ''{0}''", value);
     return EscapingConventions.FilterNormalizeMediaUri.INSTANCE.getInnocuousOutput();
+  }
+
+  /**
+   * Like {@link #filterNormalizeUri} but also escapes ';'. It is a special character in content of
+   * {@code <meta http-equiv="Refresh">}.
+   */
+  public static String filterNormalizeRefreshUri(SoyValue value) {
+    return filterNormalizeUri(value).replace(";", "%3B");
+  }
+
+  /** Like {@link #filterNormalizeUri} but also escapes ';'. */
+  public static String filterNormalizeRefreshUri(String value) {
+    return filterNormalizeUri(value).replace(";", "%3B");
   }
 
   /** Makes sure the given input is an instance of either trustedResourceUrl or trustedString. */
@@ -830,102 +871,6 @@ public final class Sanitizers {
     }
     logger.log(Level.WARNING, "|filterHtmlElementName received bad value ''{0}''", value);
     return EscapingConventions.FilterHtmlElementName.INSTANCE.getInnocuousOutput();
-  }
-
-  /**
-   * Filters noAutoescape input from explicitly tainted content.
-   *
-   * <p>SanitizedContent.ContentKind.TEXT is used to explicitly mark input that is never meant to be
-   * used unescaped. Specifically, {let} and {param} blocks of kind "text" are explicitly forbidden
-   * from being noAutoescaped to avoid XSS regressions during application transition.
-   */
-  public static SoyValue filterNoAutoescape(SoyValue value) {
-    value = normalizeNull(value);
-    // TODO: Consider also checking for things that are never valid, like null characters.
-    if (isSanitizedContentOfKind(value, SanitizedContent.ContentKind.TEXT)) {
-      logger.log(
-          Level.WARNING,
-          "|noAutoescape received value explicitly tagged as ContentKind.TEXT: ''{0}''",
-          value);
-      return StringData.forValue(EscapingConventions.INNOCUOUS_OUTPUT);
-    }
-    return value;
-  }
-
-  /**
-   * Applies the |noAutoescape directive and filters explicitly tainted content.
-   *
-   * <p>See {@link #filterNoAutoescape(SoyValue)}
-   */
-  public static LoggingAdvisingAppendable filterNoAutoescapeStreaming(
-      LoggingAdvisingAppendable appendable) {
-    return new ForwardingLoggingAdvisingAppendable(appendable) {
-
-      private boolean isInText() {
-        return getSantizedContentKind() == ContentKind.TEXT;
-      }
-
-      @Override
-      protected void notifyContentKind(ContentKind kind) throws IOException {
-        if (isInText()) {
-          logger.log(
-              Level.WARNING, "|noAutoescape received value explicitly tagged as ContentKind.TEXT");
-          // append directly to the delegate.
-          delegate.append(EscapingConventions.INNOCUOUS_OUTPUT);
-        }
-      }
-
-      @Override
-      public LoggingAdvisingAppendable appendLoggingFunctionInvocation(
-          LoggingFunctionInvocation funCall, ImmutableList<Function<String, String>> escapers)
-          throws IOException {
-        if (isInText()) {
-          return this;
-        }
-        return super.appendLoggingFunctionInvocation(funCall, escapers);
-      }
-
-      @Override
-      public LoggingAdvisingAppendable append(char c) throws IOException {
-        if (isInText()) {
-          return this;
-        }
-        return super.append(c);
-      }
-
-      @Override
-      public LoggingAdvisingAppendable append(CharSequence csq) throws IOException {
-        if (isInText()) {
-          return this;
-        }
-        return super.append(csq);
-      }
-
-      @Override
-      public LoggingAdvisingAppendable append(CharSequence csq, int start, int end)
-          throws IOException {
-        if (isInText()) {
-          return this;
-        }
-        return super.append(csq, start, end);
-      }
-
-      @Override
-      public LoggingAdvisingAppendable enterLoggableElement(LogStatement statement) {
-        if (isInText()) {
-          return this;
-        }
-        return super.enterLoggableElement(statement);
-      }
-
-      @Override
-      public LoggingAdvisingAppendable exitLoggableElement() {
-        if (isInText()) {
-          return this;
-        }
-        return super.exitLoggableElement();
-      }
-    };
   }
 
   /** True iff the given value is sanitized content of the given kind. */

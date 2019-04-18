@@ -36,8 +36,12 @@ public final class HtmlOpenTagNode extends HtmlTagNode {
   private final boolean selfClosing;
 
   public HtmlOpenTagNode(
-      int id, TagName tagName, SourceLocation sourceLocation, boolean selfClosing) {
-    super(id, tagName, sourceLocation);
+      int id,
+      StandaloneNode node,
+      SourceLocation sourceLocation,
+      boolean selfClosing,
+      TagExistence tagExistence) {
+    super(id, node, sourceLocation, tagExistence);
     this.selfClosing = selfClosing;
   }
 
@@ -53,6 +57,15 @@ public final class HtmlOpenTagNode extends HtmlTagNode {
 
   public boolean isSelfClosing() {
     return selfClosing;
+  }
+
+  public KeyNode getKeyNode() {
+    for (SoyNode child : getChildren()) {
+      if (child instanceof KeyNode) {
+        return ((KeyNode) child);
+      }
+    }
+    return null;
   }
 
   @Override

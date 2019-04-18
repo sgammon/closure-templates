@@ -44,14 +44,14 @@ public final class SoyToJbcSrcCompiler extends AbstractSoyCompiler {
   )
   private File outputSrcJar;
 
-  SoyToJbcSrcCompiler(ClassLoader loader) {
-    super(loader);
+  SoyToJbcSrcCompiler(PluginLoader loader, SoyInputCache cache) {
+    super(loader, cache);
   }
 
   SoyToJbcSrcCompiler() {}
 
   @Override
-  void compile(SoyFileSet.Builder sfsBuilder) throws IOException {
+  protected void compile(SoyFileSet.Builder sfsBuilder) throws IOException {
     Optional<ByteSink> srcJarSink = Optional.absent();
     if (outputSrcJar != null) {
       srcJarSink = Optional.of(Files.asByteSink(outputSrcJar));

@@ -19,7 +19,6 @@ package com.google.template.soy.jssrc.internal;
 import static com.google.common.base.Preconditions.checkState;
 import static com.google.template.soy.jssrc.dsl.Expression.construct;
 import static com.google.template.soy.jssrc.dsl.Expression.id;
-import static com.google.template.soy.jssrc.dsl.Expression.objectLiteral;
 import static com.google.template.soy.jssrc.dsl.Expression.stringLiteral;
 import static com.google.template.soy.jssrc.internal.JsRuntime.GOOG_GET_MSG;
 import static com.google.template.soy.jssrc.internal.JsRuntime.GOOG_I18N_MESSAGE_FORMAT;
@@ -170,10 +169,11 @@ public class GenJsCodeVisitorAssistantForMsgs extends AbstractSoyNodeVisitor<Voi
     for (SoyPrintDirective printDirective : node.getEscapingDirectives()) {
       msg =
           SoyJsPluginUtils.applyDirective(
-              translationContext.codeGenerator(),
               msg,
               (SoyJsSrcPrintDirective) printDirective,
-              /* args= */ ImmutableList.<Expression>of());
+              /* args= */ ImmutableList.of(),
+              node.getSourceLocation(),
+              errorReporter);
     }
     return msg;
   }
@@ -300,11 +300,11 @@ public class GenJsCodeVisitorAssistantForMsgs extends AbstractSoyNodeVisitor<Voi
     // Generate JS comment (JSDoc) block for the goog.getMsg() call.
     JsDoc.Builder jsDocBuilder = JsDoc.builder();
     if (msgNode.getMeaning() != null) {
-      jsDocBuilder.addTag("meaning", msgNode.getMeaning());
+      jsDocBuilder.addAnnotation("meaning", msgNode.getMeaning());
     }
-    jsDocBuilder.addTag("desc", msgNode.getDesc());
+    jsDocBuilder.addAnnotation("desc", msgNode.getDesc());
     if (msgNode.isHidden()) {
-      jsDocBuilder.addTag("hidden");
+      jsDocBuilder.addAnnotation("hidden");
     }
 
     // Generate goog.getMsg() call.
@@ -485,7 +485,7 @@ public class GenJsCodeVisitorAssistantForMsgs extends AbstractSoyNodeVisitor<Voi
   }
 
   private Expression translateExpr(ExprNode expr) {
-    return new TranslateExprNodeVisitor(translationContext, errorReporter).exec(expr);
+    return master.getExprTranslator().exec(expr);
   }
 
   /**
@@ -567,7 +567,12 @@ public class GenJsCodeVisitorAssistantForMsgs extends AbstractSoyNodeVisitor<Voi
         }
 
         Expression call =
-            genCallCodeUtils.gen(callNode, templateAliases, translationContext, errorReporter);
+            genCallCodeUtils.gen(
+                callNode,
+                templateAliases,
+                translationContext,
+                errorReporter,
+                master.getExprTranslator());
         contentChunks.add(call);
       } else {
         List<Expression> chunks = genJsExprsVisitor.exec(contentNode);
@@ -649,11 +654,7 @@ public class GenJsCodeVisitorAssistantForMsgs extends AbstractSoyNodeVisitor<Voi
     }
 
     Expression build() {
-      ImmutableList.Builder<Expression> keys = ImmutableList.builder();
-      for (String key : map.keySet()) {
-        keys.add(stringLiteral(key));
-      }
-      return objectLiteral(keys.build(), map.values());
+      return Expression.objectLiteralWithQuotedKeys(map);
     }
   }
 }

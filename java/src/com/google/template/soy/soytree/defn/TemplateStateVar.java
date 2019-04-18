@@ -17,43 +17,50 @@
 package com.google.template.soy.soytree.defn;
 
 import com.google.template.soy.base.SourceLocation;
+import com.google.template.soy.basetree.CopyState;
+import com.google.template.soy.exprtree.ExprNode;
+import com.google.template.soy.exprtree.ExprRootNode;
 import com.google.template.soy.types.SoyType;
 import com.google.template.soy.types.ast.TypeNode;
 import javax.annotation.Nullable;
-import javax.annotation.concurrent.Immutable;
 
 /**
  * An explicitly declared template state variable.
  *
  * <p>Important: Do not use outside of Soy code (treat as superpackage-private).
  */
-@Immutable
 public final class TemplateStateVar extends AbstractVarDefn implements TemplateHeaderVarDefn {
-  private final SourceLocation nameLocation;
   private final String desc;
-  private final TypeNode typeNode;
+  @Nullable private final TypeNode typeNode;
+  private final ExprRootNode initialValue;
 
   public TemplateStateVar(
       String name,
-      SoyType type,
-      TypeNode typeNode,
+      @Nullable TypeNode typeNode,
+      ExprNode initialValue,
       @Nullable String desc,
       @Nullable SourceLocation nameLocation) {
-    super(name, type);
+    super(name, nameLocation, /*type=*/ null);
     this.typeNode = typeNode;
     this.desc = desc;
-    this.nameLocation = nameLocation;
+    this.initialValue = new ExprRootNode(initialValue);
   }
 
-  TemplateStateVar(TemplateStateVar stateVar) {
-    super(stateVar);
-    this.typeNode = stateVar.typeNode;
-    this.desc = stateVar.desc;
-    this.nameLocation = stateVar.nameLocation;
+  private TemplateStateVar(TemplateStateVar old) {
+    super(old);
+    this.typeNode = old.typeNode == null ? null : old.typeNode.copy();
+    this.desc = old.desc;
+    this.initialValue = old.initialValue.copy(new CopyState());
   }
 
-  public TypeNode typeNode() {
+  @Nullable
+  public TypeNode getTypeNode() {
     return typeNode;
+  }
+
+  @Override
+  public ExprRootNode defaultValue() {
+    return initialValue;
   }
 
   @Override
@@ -66,9 +73,12 @@ public final class TemplateStateVar extends AbstractVarDefn implements TemplateH
     return false;
   }
 
-  @Override
-  public @Nullable SourceLocation nameLocation() {
-    return nameLocation;
+  public void setType(SoyType type) {
+    if (this.type == null) {
+      this.type = type;
+    } else {
+      throw new IllegalStateException("type has already been set.");
+    }
   }
 
   @Override
@@ -88,5 +98,10 @@ public final class TemplateStateVar extends AbstractVarDefn implements TemplateH
     description.append("{name = ").append(name());
     description.append(", desc = ").append(desc).append("}");
     return description.toString();
+  }
+
+  @Override
+  public TemplateStateVar copy() {
+    return new TemplateStateVar(this);
   }
 }

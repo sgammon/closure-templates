@@ -37,16 +37,16 @@ public final class ListLiteralNodeTest {
   @Test
   public void testToSourceString() {
 
-    VarRefNode dataRef = new VarRefNode("foo", X, false, null);
+    VarRefNode dataRef = new VarRefNode("foo", X, null);
 
     ListLiteralNode listLit =
         new ListLiteralNode(
-            ImmutableList.<ExprNode>of(
+            ImmutableList.of(
                 new StringNode("blah", QuoteStyle.SINGLE, X), new IntegerNode(123, X), dataRef),
             X);
     assertThat(listLit.toSourceString()).isEqualTo("['blah', 123, $foo]");
 
-    ListLiteralNode emptyListLit = new ListLiteralNode(ImmutableList.<ExprNode>of(), X);
+    ListLiteralNode emptyListLit = new ListLiteralNode(ImmutableList.of(), X);
     assertThat(emptyListLit.toSourceString()).isEqualTo("[]");
   }
 }

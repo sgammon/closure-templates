@@ -22,11 +22,9 @@ import com.google.auto.value.AutoValue;
 import com.google.common.collect.ImmutableList;
 import com.google.template.soy.base.SourceLocation;
 import com.google.template.soy.base.internal.Identifier;
-import com.google.template.soy.base.internal.SoyFileKind;
 import com.google.template.soy.base.internal.SoyFileSupplier.Version;
 import com.google.template.soy.error.ErrorReporter;
 import com.google.template.soy.shared.SoyAstCache.VersionedFile;
-import com.google.template.soy.soytree.CommandTagAttribute;
 import com.google.template.soy.soytree.NamespaceDeclaration;
 import com.google.template.soy.soytree.SoyFileNode;
 import com.google.template.soy.soytree.TemplateNode;
@@ -49,14 +47,13 @@ public final class SoyAstCacheTest {
   private final FakeVersion version1 = new AutoValue_SoyAstCacheTest_FakeVersion(1);
   private final FakeVersion version2 = new AutoValue_SoyAstCacheTest_FakeVersion(2);
 
-  private SoyFileNode fileNode1 =
+  private final SoyFileNode fileNode1 =
       new SoyFileNode(
           0xdeadbeef,
           "test.soy",
-          SoyFileKind.SRC,
           new NamespaceDeclaration(
               Identifier.create("fake.namespace", SourceLocation.UNKNOWN),
-              ImmutableList.<CommandTagAttribute>of(),
+              ImmutableList.of(),
               ErrorReporter.exploding()),
           new TemplateNode.SoyFileHeaderInfo("fake.namespace"));
 

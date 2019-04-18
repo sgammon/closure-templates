@@ -37,22 +37,24 @@ const {startsWith} = goog.require('goog.string');
 /** @final */
 class ElementMetadata {
   /**
-   * @param {string} id
+   * @param {number} id
    * @param {?Message} data
    * @param {boolean} logOnly
    */
   constructor(id, data, logOnly) {
     /**
      * The identifier for the logging element
-     * @const {string}
+     * @const {number}
      */
     this.id = id;
+
     /**
      * The optional payload from the `data` attribute. This is guaranteed to
      * match the proto_type specified in the logging configuration.
      * @const {?Message}
      */
     this.data = data;
+
     /**
      * Whether or not this element is in logOnly mode. In logOnly mode the log
      * records are collected but the actual elements are not rendered.
@@ -67,12 +69,10 @@ class FunctionMetadata {
   /**
    * @param {string} name
    * @param {!Array<?>} args
-   * @param {string} attr
    */
-  constructor(name, args, attr) {
+  constructor(name, args) {
     this.name = name;
     this.args = args;
-    this.attr = attr;
   }
 }
 
@@ -88,9 +88,14 @@ class Metadata {
 
 /** @type {?Metadata} */ let metadata;
 
-/** @package */ const ELEMENT_ATTR = 'data-' + xid('soylog');
 
-/** @package */ const FUNCTION_ATTR = 'data-' + xid('soyloggingfunction-');
+// NOTE: we need to use toLowerCase in case the xid contains upper case
+// characters, browsers normalize keys to their ascii lowercase versions when
+// accessing attributes via the programmatic APIs (as we do below).
+/** @package */ const ELEMENT_ATTR = 'data-' + xid('soylog').toLowerCase();
+
+/** @package */ const FUNCTION_ATTR =
+    'data-' + xid('soyloggingfunction').toLowerCase() + '-';
 
 /** Sets up the global metadata object before rendering any templates. */
 function setUpLogging() {
@@ -135,16 +140,18 @@ function setMetadataTestOnly(testdata) {
 /**
  * Records the id and additional data into the global metadata structure.
  *
- * @param {string} veid The id of the visual element that will be logged.
- * @param {?Message} veData Additional data that is needed for logging.
+ * @param {!$$VisualElementData} veData The VE to log.
  * @param {boolean} logOnly Whether to enable counterfactual logging.
  *
  * @return {string} The HTML attribute that will be stored in the DOM.
  */
-function $$getLoggingAttribute(veid, veData, logOnly) {
+function $$getLoggingAttribute(veData, logOnly) {
   if ($$hasMetadata()) {
     const dataIdx =
-        metadata.elements.push(new ElementMetadata(veid, veData, logOnly)) - 1;
+        metadata.elements.push(
+            new ElementMetadata(
+                veData.getVe().getId(), veData.getData(), logOnly))
+        - 1;
     // Insert a whitespace at the beginning. In VeLogInstrumentationVisitor,
     // we insert the return value of this method as a plain string instead of a
     // HTML attribute, therefore the desugaring pass does not know how to handle
@@ -170,16 +177,14 @@ function $$getLoggingAttribute(veid, veData, logOnly) {
  * @param {string} name Obfuscated logging function name.
  * @param {!Array<?>} args List of arguments for the logging function.
  * @param {string} attr The original HTML attribute name.
- * @param {number} counter Used to disambiguate multiple instances of the
- *     attribute in a single tag.
  *
  * @return {string} The HTML attribute that will be stored in the DOM.
  */
-function $$getLoggingFunctionAttribute(name, args, attr, counter) {
+function $$getLoggingFunctionAttribute(name, args, attr) {
   if ($$hasMetadata()) {
     const functionIdx =
-        metadata.functions.push(new FunctionMetadata(name, args, attr)) - 1;
-    return ' ' + FUNCTION_ATTR + counter + '="' + functionIdx + '"';
+        metadata.functions.push(new FunctionMetadata(name, args)) - 1;
+    return ' ' + FUNCTION_ATTR + attr + '="' + functionIdx + '"';
   } else {
     return '';
   }
@@ -263,7 +268,8 @@ function replaceFunctionAttributes(element, logger) {
           !Number.isNaN(funcIndex) && funcIndex < metadata.functions.length,
           'Invalid logging attribute.');
       const funcMetadata = metadata.functions[funcIndex];
-      attributeMap[funcMetadata.attr] =
+      const attr = attributeName.substring(FUNCTION_ATTR.length);
+      attributeMap[attr] =
           logger.evalLoggingFunction(funcMetadata.name, funcMetadata.args);
       element.removeAttribute(attributeName);
     }
@@ -296,6 +302,7 @@ function getDataAttribute(element, attr) {
  * @interface
  */
 class Logger {
+
   /**
    * Called when a `{velog}` statement is entered.
    * @param {!ElementMetadata} elementMetadata
@@ -316,6 +323,90 @@ class Logger {
   evalLoggingFunction(name, args) {}
 }
 
+/** The ID of the UndefinedVe. */
+const UNDEFINED_VE_ID = -1;
+
+/**
+ * Soy's runtime representation of objects of the Soy `ve` type.
+ *
+ * <p>This is for use only in Soy internal code and Soy generated JS. DO NOT use
+ * this from handwritten code.
+ *
+ * @final
+ */
+class $$VisualElement {
+  /**
+   * @param {number} id
+   * @param {string=} name
+   */
+  constructor(id, name = undefined) {
+    /** @private @const {number} */
+    this.id_ = id;
+    /** @private @const {string|undefined} */
+    this.name_ = name;
+  }
+
+  /** @return {number} */
+  getId() {
+    return this.id_;
+  }
+
+  /** @package @return {string} */
+  toDebugString() {
+    return `ve(${this.name_})`;
+  }
+
+  /** @override */
+  toString() {
+    if (goog.DEBUG) {
+      return `**FOR DEBUGGING ONLY ${this.toDebugString()}, id: ${this.id_}**`;
+    } else {
+      return 'zSoyVez';
+    }
+  }
+}
+
+/**
+ * Soy's runtime representation of objects of the Soy `ve_data` type.
+ *
+ * <p>This is for use only in Soy internal code and Soy generated JS. DO NOT use
+ * this from handwritten code.
+ *
+ * @final
+ */
+class $$VisualElementData {
+  /**
+   * @param {!$$VisualElement} ve
+   * @param {?Message} data
+   */
+  constructor(ve, data) {
+    /** @private @const {!$$VisualElement} */
+    this.ve_ = ve;
+    /** @private @const {?Message} */
+    this.data_ = data;
+  }
+
+  /** @return {!$$VisualElement} */
+  getVe() {
+    return this.ve_;
+  }
+
+  /** @return {?Message} */
+  getData() {
+    return this.data_;
+  }
+
+  /** @override */
+  toString() {
+    if (goog.DEBUG) {
+      return `**FOR DEBUGGING ONLY ve_data(${this.ve_.toDebugString()}, ${
+          this.data_})**`;
+    } else {
+      return 'zSoyVeDz';
+    }
+  }
+}
+
 exports = {
   $$hasMetadata,
   $$getLoggingAttribute,
@@ -325,7 +416,10 @@ exports = {
   ElementMetadata,
   FunctionMetadata,
   Logger,
+  UNDEFINED_VE_ID,
   Metadata,
+  $$VisualElement,
+  $$VisualElementData,
   emitLoggingCommands,
   setMetadataTestOnly,
   setUpLogging,

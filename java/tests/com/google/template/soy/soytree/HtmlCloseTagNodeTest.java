@@ -22,6 +22,7 @@ import com.google.common.collect.ImmutableList;
 import com.google.template.soy.base.SourceLocation;
 import com.google.template.soy.error.ErrorReporter;
 import com.google.template.soy.exprtree.VarRefNode;
+import com.google.template.soy.soytree.HtmlTagNode.TagExistence;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
@@ -32,7 +33,8 @@ public final class HtmlCloseTagNodeTest {
   @Test
   public void testToSourceString() {
     RawTextNode node = new RawTextNode(0, "div", SourceLocation.UNKNOWN);
-    HtmlCloseTagNode closeTag = new HtmlCloseTagNode(1, new TagName(node), SourceLocation.UNKNOWN);
+    HtmlCloseTagNode closeTag =
+        new HtmlCloseTagNode(1, node, SourceLocation.UNKNOWN, TagExistence.IN_TEMPLATE);
     closeTag.addChild(node);
     assertThat(closeTag.toSourceString()).isEqualTo("</div>");
     PrintNode dynamicTagName =
@@ -40,10 +42,11 @@ public final class HtmlCloseTagNodeTest {
             2,
             SourceLocation.UNKNOWN,
             true,
-            new VarRefNode("tag", SourceLocation.UNKNOWN, false, null),
+            new VarRefNode("tag", SourceLocation.UNKNOWN, null),
             ImmutableList.of(),
             ErrorReporter.exploding());
-    closeTag = new HtmlCloseTagNode(1, new TagName(dynamicTagName), SourceLocation.UNKNOWN);
+    closeTag =
+        new HtmlCloseTagNode(1, dynamicTagName, SourceLocation.UNKNOWN, TagExistence.IN_TEMPLATE);
     closeTag.addChild(dynamicTagName);
     assertThat(closeTag.toSourceString()).isEqualTo("</{$tag}>");
   }

@@ -32,7 +32,6 @@ import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Iterables;
 import com.google.errorprone.annotations.ForOverride;
 import com.google.template.soy.base.internal.Identifier;
-import com.google.template.soy.basicfunctions.DebugSoyTemplateInfoFunction;
 import com.google.template.soy.data.LoggingAdvisingAppendable;
 import com.google.template.soy.data.SoyAbstractValue;
 import com.google.template.soy.data.SoyDataException;
@@ -85,7 +84,9 @@ import com.google.template.soy.exprtree.OperatorNodes.TimesOpNode;
 import com.google.template.soy.exprtree.ProtoInitNode;
 import com.google.template.soy.exprtree.RecordLiteralNode;
 import com.google.template.soy.exprtree.StringNode;
+import com.google.template.soy.exprtree.VarDefn;
 import com.google.template.soy.exprtree.VarRefNode;
+import com.google.template.soy.exprtree.VeLiteralNode;
 import com.google.template.soy.logging.LoggingFunction;
 import com.google.template.soy.msgs.SoyMsgBundle;
 import com.google.template.soy.plugin.java.restricted.JavaValueFactory;
@@ -95,11 +96,13 @@ import com.google.template.soy.shared.SoyIdRenamingMap;
 import com.google.template.soy.shared.internal.BuiltinFunction;
 import com.google.template.soy.shared.restricted.SoyJavaFunction;
 import com.google.template.soy.soytree.defn.LoopVar;
+import com.google.template.soy.soytree.defn.TemplateParam;
+import com.google.template.soy.soytree.defn.TemplateStateVar;
 import com.google.template.soy.types.MapType;
 import com.google.template.soy.types.SoyProtoType;
 import com.google.template.soy.types.SoyType;
-import com.google.template.soy.types.SoyType.Kind;
 import com.google.template.soy.types.SoyTypes;
+import com.google.template.soy.types.UnionType;
 import java.io.IOException;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -126,7 +129,6 @@ public class EvalVisitor extends AbstractReturningExprNodeVisitor<SoyValue> {
      * Creates an EvalVisitor.
      *
      * @param env The current environment.
-     * @param ijData The current injected data.
      * @param cssRenamingMap The CSS renaming map, or null if not applicable.
      * @param xidRenamingMap The XID renaming map, or null if not applicable.
      * @param pluginInstances The instances used for evaluating functions that call instance
@@ -135,7 +137,6 @@ public class EvalVisitor extends AbstractReturningExprNodeVisitor<SoyValue> {
      */
     EvalVisitor create(
         Environment env,
-        @Nullable SoyRecord ijData,
         @Nullable SoyCssRenamingMap cssRenamingMap,
         @Nullable SoyIdRenamingMap xidRenamingMap,
         @Nullable SoyMsgBundle msgBundle,
@@ -145,9 +146,6 @@ public class EvalVisitor extends AbstractReturningExprNodeVisitor<SoyValue> {
 
   /** The current environment. */
   private final Environment env;
-
-  /** The current injected data. */
-  @Nullable private final SoyRecord ijData;
 
   @Nullable private final SoyMsgBundle msgBundle;
 
@@ -170,20 +168,17 @@ public class EvalVisitor extends AbstractReturningExprNodeVisitor<SoyValue> {
   private final ImmutableMap<String, Supplier<Object>> pluginInstances;
 
   /**
-   * @param ijData The current injected data.
    * @param env The current environment.
    * @param pluginInstances The instances used for evaluating functions that call instance methods.
    */
   protected EvalVisitor(
       Environment env,
-      @Nullable SoyRecord ijData,
       @Nullable SoyCssRenamingMap cssRenamingMap,
       @Nullable SoyIdRenamingMap xidRenamingMap,
       @Nullable SoyMsgBundle msgBundle,
       boolean debugSoyTemplateInfo,
       ImmutableMap<String, Supplier<Object>> pluginInstances) {
     this.env = checkNotNull(env);
-    this.ijData = ijData;
     this.msgBundle = msgBundle;
     this.cssRenamingMap = (cssRenamingMap == null) ? SoyCssRenamingMap.EMPTY : cssRenamingMap;
     this.xidRenamingMap = (xidRenamingMap == null) ? SoyCssRenamingMap.EMPTY : xidRenamingMap;
@@ -335,22 +330,19 @@ public class EvalVisitor extends AbstractReturningExprNodeVisitor<SoyValue> {
   }
 
   private SoyValue visitNullSafeVarRefNode(VarRefNode varRef) {
-    SoyValue result = null;
-    if (varRef.isDollarSignIjParameter()) {
-      // TODO(lukes): it would be nice to move this logic into Environment or even eliminate the
-      // ijData == null case.  It seems like this case is mostly for prerendering, though im not
-      // sure.
-      if (ijData != null) {
-        result = ijData.getField(varRef.getName());
-      } else {
-        throw RenderException.create(
-            "Injected data not provided, yet referenced (" + varRef.toSourceString() + ").");
-      }
+    if (varRef.getDefnDecl().kind() == VarDefn.Kind.STATE) {
+      TemplateStateVar state = (TemplateStateVar) varRef.getDefnDecl();
+      return visit(state.defaultValue());
     } else {
-      return env.getVar(varRef.getDefnDecl());
+      SoyValue value = env.getVar(varRef.getDefnDecl());
+      if (varRef.getDefnDecl().kind() == VarDefn.Kind.PARAM
+          && ((TemplateParam) varRef.getDefnDecl()).hasDefault()
+          && (UndefinedData.INSTANCE == value)) {
+        // Use the default value if it has one and the parameter is undefined.
+        value = visit(((TemplateParam) varRef.getDefnDecl()).defaultValue());
+      }
+      return value;
     }
-
-    return (result != null) ? result : UndefinedData.INSTANCE;
   }
 
   private SoyValue visitNullSafeFieldAccessNode(FieldAccessNode fieldAccess) {
@@ -382,7 +374,7 @@ public class EvalVisitor extends AbstractReturningExprNodeVisitor<SoyValue> {
 
     // If the static type is a proto, access it using proto semantics
     // the base type is possibly nullable, so remove null before testing for being a proto
-    if (SoyTypes.tryRemoveNull(fieldAccess.getBaseExprChild().getType()).getKind() == Kind.PROTO) {
+    if (isProtoOrUnionOfProtos(fieldAccess.getBaseExprChild().getType())) {
       return ((SoyProtoValue) base).getProtoField(fieldAccess.getFieldName());
     }
     maybeMarkBadProtoAccess(fieldAccess, base);
@@ -404,6 +396,22 @@ public class EvalVisitor extends AbstractReturningExprNodeVisitor<SoyValue> {
     }
 
     return (value != null) ? value : UndefinedData.INSTANCE;
+  }
+
+  private static boolean isProtoOrUnionOfProtos(SoyType type) {
+    if (type.getKind() == SoyType.Kind.PROTO) {
+      return true;
+    }
+    if (type.getKind() == SoyType.Kind.UNION) {
+      for (SoyType memberType : ((UnionType) type).getMembers()) {
+        if (memberType.getKind() != SoyType.Kind.PROTO
+            && memberType.getKind() != SoyType.Kind.NULL) {
+          return false;
+        }
+      }
+      return true;
+    }
+    return false;
   }
 
   private SoyValue visitNullSafeItemAccessNode(ItemAccessNode itemAccess) {
@@ -635,6 +643,12 @@ public class EvalVisitor extends AbstractReturningExprNodeVisitor<SoyValue> {
         case V1_EXPRESSION:
           throw new UnsupportedOperationException(
               "the v1Expression function can't be used in templates compiled to Java");
+        case TO_FLOAT:
+          return visitToFloatFunction(node);
+        case DEBUG_SOY_TEMPLATE_INFO:
+          return BooleanData.forValue(debugSoyTemplateInfo);
+        case VE_DATA:
+          return NullData.INSTANCE;
         case MSG_WITH_ID:
         case REMAINDER:
           // should have been removed earlier in the compiler
@@ -700,12 +714,6 @@ public class EvalVisitor extends AbstractReturningExprNodeVisitor<SoyValue> {
   @ForOverride
   protected SoyValue computeFunctionHelper(
       SoyJavaFunction fn, List<SoyValue> args, FunctionNode fnNode) {
-    if (fn instanceof DebugSoyTemplateInfoFunction) {
-      // DebugSoyTemplateInfoFunction is a special plugin. We should not call computeForJava method
-      // on it; instead we should directly return a boolean here, based on debugSoyTemplateInfo that
-      // is not visible to the plugin.
-      return BooleanData.forValue(debugSoyTemplateInfo);
-    }
     try {
       return fn.computeForJava(args);
     } catch (Exception e) {
@@ -725,16 +733,6 @@ public class EvalVisitor extends AbstractReturningExprNodeVisitor<SoyValue> {
   @ForOverride
   protected SoyValue computeFunctionHelper(
       SoyJavaSourceFunction fn, List<SoyValue> args, final FunctionNode fnNode) {
-    // TODO(b/19252021): Uncomment once DebugSoyTemplateInfoFunction makes the transition.
-    /*
-    if (fn instanceof DebugSoyTemplateInfoFunction) {
-      // DebugSoyTemplateInfoFunction is a special plugin. We should not call computeForJava method
-      // on it; instead we should directly return a boolean here, based on debugSoyTemplateInfo that
-      // is not visible to the plugin.
-      return BooleanData.forValue(debugSoyTemplateInfo);
-    }
-    */
-
     try {
       return new TofuValueFactory(fnNode, pluginInstances).computeForJava(fn, args, context);
     } catch (Exception e) {
@@ -817,6 +815,16 @@ public class EvalVisitor extends AbstractReturningExprNodeVisitor<SoyValue> {
     }
     long fallbackMsgId = ((IntegerNode) node.getChild(2)).getValue();
     return BooleanData.forValue(msgBundle.getMsgParts(fallbackMsgId).isEmpty());
+  }
+
+  private SoyValue visitToFloatFunction(FunctionNode node) {
+    IntegerData v = (IntegerData) visit(node.getChild(0));
+    return FloatData.forValue((double) v.longValue());
+  }
+
+  @Override
+  protected SoyValue visitVeLiteralNode(VeLiteralNode node) {
+    return NullData.INSTANCE;
   }
 
   // -----------------------------------------------------------------------------------------------

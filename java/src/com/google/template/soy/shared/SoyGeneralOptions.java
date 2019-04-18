@@ -26,14 +26,12 @@ import com.google.common.io.Files;
 import com.google.common.io.Resources;
 import com.google.template.soy.SoyUtils;
 import com.google.template.soy.base.internal.TriState;
-import com.google.template.soy.basetree.SyntaxVersion;
 import com.google.template.soy.data.internalutils.InternalValueUtils;
 import com.google.template.soy.data.restricted.PrimitiveData;
 import java.io.File;
 import java.io.IOException;
 import java.net.URL;
 import java.util.Map;
-import javax.annotation.Nonnull;
 
 /**
  * Compilation options applicable to the Soy frontend and/or to multiple Soy backends.
@@ -41,14 +39,8 @@ import javax.annotation.Nonnull;
  */
 public final class SoyGeneralOptions implements Cloneable {
 
-  /** User-declared syntax version, or V2_0 if not set. */
-  private SyntaxVersion declaredSyntaxVersion = SyntaxVersion.V2_0;
-
   /** Whether to allow external calls (calls to undefined templates). Null if not explicitly set. */
   private TriState allowExternalCalls = TriState.UNSET;
-
-  /** Whether Strict autoescaping is required. */
-  private TriState strictAutoescapingRequired = TriState.UNSET;
 
   /** Map from compile-time global name to value. */
   private ImmutableMap<String, PrimitiveData> compileTimeGlobals;
@@ -62,9 +54,7 @@ public final class SoyGeneralOptions implements Cloneable {
   public SoyGeneralOptions() {}
 
   private SoyGeneralOptions(SoyGeneralOptions orig) {
-    this.declaredSyntaxVersion = orig.declaredSyntaxVersion;
     this.allowExternalCalls = orig.allowExternalCalls;
-    this.strictAutoescapingRequired = orig.strictAutoescapingRequired;
     this.compileTimeGlobals = orig.compileTimeGlobals;
     this.experimentalFeatures = ImmutableSet.copyOf(orig.experimentalFeatures);
     this.enabledOptimizer = orig.isOptimizerEnabled();
@@ -93,26 +83,6 @@ public final class SoyGeneralOptions implements Cloneable {
   }
 
   /**
-   * Sets the user-declared syntax version name for the Soy file bundle.
-   *
-   * @param versionName The syntax version name, e.g. "1.0", "2.0", "2.3".
-   */
-  public SoyGeneralOptions setDeclaredSyntaxVersionName(@Nonnull String versionName) {
-    this.declaredSyntaxVersion = SyntaxVersion.forName(versionName);
-    return this;
-  }
-
-  /**
-   * Returns the user-declared syntax version, or the given default value if the user did not
-   * declare a syntax version.
-   *
-   * <p>Important: Do not use outside of Soy code (treat as superpackage-private).
-   */
-  public SyntaxVersion getDeclaredSyntaxVersion() {
-    return declaredSyntaxVersion;
-  }
-
-  /**
    * Sets whether to allow external calls (calls to undefined templates).
    *
    * @param allowExternalCalls The value to set.
@@ -128,24 +98,6 @@ public final class SoyGeneralOptions implements Cloneable {
    */
   public TriState allowExternalCalls() {
     return allowExternalCalls;
-  }
-
-  /**
-   * Sets whether strict autoescaping is required.
-   *
-   * @param strictAutoescapingRequired Whether autoescaping is required.
-   */
-  public SoyGeneralOptions setStrictAutoescapingRequired(boolean strictAutoescapingRequired) {
-    this.strictAutoescapingRequired = TriState.from(strictAutoescapingRequired);
-    return this;
-  }
-
-  /**
-   * Returns whether strict autoescaping is required. If this option was never explicitly set, then
-   * returns {@link TriState#UNSET}.
-   */
-  public TriState isStrictAutoescapingRequired() {
-    return strictAutoescapingRequired;
   }
 
   /**
@@ -229,9 +181,7 @@ public final class SoyGeneralOptions implements Cloneable {
 
   /** Returns the map from compile-time global name to value. */
   public ImmutableMap<String, PrimitiveData> getCompileTimeGlobals() {
-    return compileTimeGlobals == null
-        ? ImmutableMap.<String, PrimitiveData>of()
-        : compileTimeGlobals;
+    return compileTimeGlobals == null ? ImmutableMap.of() : compileTimeGlobals;
   }
 
   @Override
@@ -242,9 +192,7 @@ public final class SoyGeneralOptions implements Cloneable {
   @Override
   public final String toString() {
     return MoreObjects.toStringHelper(this)
-        .add("declaredSyntaxVersion", declaredSyntaxVersion)
         .add("allowExternalCalls", allowExternalCalls)
-        .add("strictAutoescapingRequired", strictAutoescapingRequired)
         .add("compileTimeGlobals", compileTimeGlobals)
         .add("experimentalFeatures", experimentalFeatures)
         .add("enabledOptimizer", enabledOptimizer)

@@ -24,33 +24,34 @@ import javax.annotation.Nullable;
 @AutoValue
 @Immutable
 abstract class Assignment extends Statement {
-  abstract String varName();
+  abstract Expression lhs();
 
   abstract Expression rhs();
 
   @Nullable
   abstract JsDoc jsDoc();
 
-  static Assignment create(String varName, Expression rhs, JsDoc jsDoc) {
-    return new AutoValue_Assignment(varName, rhs, jsDoc);
-  }
-
-  static Assignment create(String varName, Expression rhs) {
-    return new AutoValue_Assignment(varName, rhs, null);
+  static Assignment create(Expression lhs, Expression rhs, JsDoc jsDoc) {
+    return new AutoValue_Assignment(lhs, rhs, jsDoc);
   }
 
   @Override
   public void collectRequires(RequiresCollector collector) {
+    lhs().collectRequires(collector);
     rhs().collectRequires(collector);
+    if (jsDoc() != null) {
+      jsDoc().collectRequires(collector);
+    }
   }
 
   @Override
   void doFormatInitialStatements(FormattingContext ctx) {
     if (jsDoc() != null) {
-      ctx.append(jsDoc().toString()).endLine();
+      ctx.append(jsDoc()).endLine();
     }
-    ctx.appendInitialStatements(rhs())
-        .append(varName())
+    ctx.appendInitialStatements(lhs())
+        .appendInitialStatements(rhs())
+        .appendOutputExpression(lhs())
         .append(" = ")
         .appendOutputExpression(rhs())
         .append(";")

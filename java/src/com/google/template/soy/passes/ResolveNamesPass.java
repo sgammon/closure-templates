@@ -41,8 +41,8 @@ import com.google.template.soy.soytree.SoyNode;
 import com.google.template.soy.soytree.SoyNode.BlockNode;
 import com.google.template.soy.soytree.SoyNode.ExprHolderNode;
 import com.google.template.soy.soytree.SoyNode.ParentSoyNode;
+import com.google.template.soy.soytree.TemplateElementNode;
 import com.google.template.soy.soytree.TemplateNode;
-import com.google.template.soy.soytree.defn.InjectedParam;
 import com.google.template.soy.soytree.defn.LocalVar;
 import com.google.template.soy.soytree.defn.LoopVar;
 import com.google.template.soy.soytree.defn.TemplateParam;
@@ -51,7 +51,6 @@ import com.google.template.soy.soytree.defn.UndeclaredVar;
 import java.util.ArrayDeque;
 import java.util.BitSet;
 import java.util.Deque;
-import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
@@ -63,7 +62,7 @@ import java.util.Map;
 public final class ResolveNamesPass extends CompilerFilePass {
   private static final SoyErrorKind GLOBAL_MATCHES_VARIABLE =
       SoyErrorKind.of(
-          "Found global reference aliasing a local variable ''{0}'', did you mean " + "''${0}''?");
+          "Found global reference aliasing a local variable ''{0}'', did you mean ''${0}''?");
 
   private static final SoyErrorKind VARIABLE_ALREADY_DEFINED =
       SoyErrorKind.of("Variable ''${0}'' already defined{1}.");
@@ -90,14 +89,14 @@ public final class ResolveNamesPass extends CompilerFilePass {
      * <p>We add {@link #slotsToRelease} to {@link #availableSlots} only when exiting a scope if
      * this value == 0.
      */
-    private int delayReleaseClaims = 0;
+    private int activeLazySlots = 0;
 
     /**
      * Enters a new scope. Variables {@link #define defined} will have a lifetime that extends until
      * a matching call to {@link #exitScope()}.
      */
     void enterScope() {
-      currentScope.push(new LinkedHashMap<String, VarDefn>());
+      currentScope.push(new LinkedHashMap<>());
     }
 
     /**
@@ -108,15 +107,15 @@ public final class ResolveNamesPass extends CompilerFilePass {
      * the parent scope closes.
      */
     void enterLazyScope() {
-      delayReleaseClaims++;
+      activeLazySlots++;
       enterScope();
     }
 
     /** Exits the current scope. */
     void exitLazyScope() {
-      checkState(delayReleaseClaims > 0, "Exiting a lazy scope when we aren't in one");
+      checkState(activeLazySlots > 0, "Exiting a lazy scope when we aren't in one");
       exitScope();
-      delayReleaseClaims--;
+      activeLazySlots--;
     }
 
     /**
@@ -135,7 +134,7 @@ public final class ResolveNamesPass extends CompilerFilePass {
         }
         slotsToRelease.set(var.localVariableIndex());
       }
-      if (delayReleaseClaims == 0) {
+      if (activeLazySlots == 0) {
         availableSlots.or(slotsToRelease);
         slotsToRelease.clear();
       }
@@ -204,7 +203,7 @@ public final class ResolveNamesPass extends CompilerFilePass {
     }
 
     void verify() {
-      checkState(delayReleaseClaims == 0, "%s lazy scope(s) are still active", delayReleaseClaims);
+      checkState(activeLazySlots == 0, "%s lazy scope(s) are still active", activeLazySlots);
       checkState(slotsToRelease.isEmpty(), "%s slots are waiting to be released", slotsToRelease);
       BitSet unavailableSlots = new BitSet(nextSlotToClaim);
       unavailableSlots.set(0, nextSlotToClaim);
@@ -217,8 +216,6 @@ public final class ResolveNamesPass extends CompilerFilePass {
 
   /** Scope for injected params. */
   private LocalVariables localVariables;
-
-  private Map<String, InjectedParam> ijParams;
 
   private final ErrorReporter errorReporter;
 
@@ -237,14 +234,15 @@ public final class ResolveNamesPass extends CompilerFilePass {
       // Create a scope for all parameters.
       localVariables = new LocalVariables();
       localVariables.enterScope();
-      ijParams = new HashMap<>();
 
       // Add both injected and regular params to the param scope.
       for (TemplateParam param : node.getAllParams()) {
         localVariables.define(param, node);
       }
-      for (TemplateStateVar stateVar : node.getStateVars()) {
-        localVariables.define(stateVar, node);
+      if (node instanceof TemplateElementNode) {
+        for (TemplateStateVar stateVar : ((TemplateElementNode) node).getStateVars()) {
+          localVariables.define(stateVar, node);
+        }
       }
 
       visitSoyNode(node);
@@ -253,7 +251,6 @@ public final class ResolveNamesPass extends CompilerFilePass {
       node.setMaxLocalVariableTableSize(localVariables.nextSlotToClaim);
 
       localVariables = null;
-      ijParams = null;
     }
 
     @Override
@@ -327,12 +324,10 @@ public final class ResolveNamesPass extends CompilerFilePass {
         return Optional.of(((LocalVar) varDefn).declaringNode().getSourceLocation());
       case STATE:
         return Optional.of(((TemplateStateVar) varDefn).nameLocation());
-      case IJ_PARAM:
       case UNDECLARED:
         return Optional.absent();
-      default:
-        throw new AssertionError();
     }
+    throw new AssertionError(varDefn.kind());
   }
 
   // -----------------------------------------------------------------------------------------------
@@ -384,20 +379,15 @@ public final class ResolveNamesPass extends CompilerFilePass {
 
     @Override
     protected void visitVarRefNode(VarRefNode varRef) {
-      if (varRef.isDollarSignIjParameter()) {
-        InjectedParam ijParam = ijParams.get(varRef.getName());
-        if (ijParam == null) {
-          ijParam = new InjectedParam(varRef.getName());
-          ijParams.put(varRef.getName(), ijParam);
-        }
-        varRef.setDefn(ijParam);
+      if (varRef.getDefnDecl() != null) {
+        // some passes (e.g. ContentSecurityPolicyNonceInjectionPass) add var refs with accurate
+        // defns.
         return;
       }
       VarDefn varDefn = localVariables.lookup(varRef.getName());
       if (varDefn == null) {
-        // this case is mostly about supporting v1 templates.  Undeclared vars for v2 templates are
-        // flagged as errors in the CheckTemplateParamsPass
-        varDefn = new UndeclaredVar(varRef.getName());
+        // Undeclared vars are flagged as errors in the CheckTemplateHeaderVarsPass.
+        varDefn = new UndeclaredVar(varRef.getName(), varRef.getSourceLocation());
       }
       varRef.setDefn(varDefn);
     }

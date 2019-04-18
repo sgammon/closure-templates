@@ -18,14 +18,12 @@ package com.google.template.soy.bidifunctions;
 
 import static com.google.common.truth.Truth.assertThat;
 
-import com.google.common.collect.ImmutableList;
 import com.google.template.soy.data.Dir;
+import com.google.template.soy.data.SanitizedContent.ContentKind;
 import com.google.template.soy.data.SanitizedContents;
+import com.google.template.soy.data.UnsafeSanitizedContentOrdainer;
 import com.google.template.soy.data.restricted.StringData;
-import com.google.template.soy.jssrc.restricted.JsExpr;
 import com.google.template.soy.plugin.java.restricted.testing.SoyJavaSourceFunctionTester;
-import com.google.template.soy.pysrc.restricted.PyExpr;
-import com.google.template.soy.pysrc.restricted.PyStringExpr;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
@@ -47,36 +45,17 @@ public class BidiTextDirFunctionTest {
     assertThat(tester.callFunction(StringData.forValue("\u05E0"))).isEqualTo(-1);
 
     assertThat(tester.callFunction(SanitizedContents.unsanitizedText("a"))).isEqualTo(1);
-    assertThat(tester.callFunction(SanitizedContents.unsanitizedText("a", Dir.LTR))).isEqualTo(1);
-    assertThat(tester.callFunction(SanitizedContents.unsanitizedText("a", Dir.RTL))).isEqualTo(-1);
-    assertThat(tester.callFunction(SanitizedContents.unsanitizedText("a", Dir.NEUTRAL)))
+    assertThat(
+            tester.callFunction(
+                UnsafeSanitizedContentOrdainer.ordainAsSafe("a", ContentKind.HTML, Dir.LTR)))
+        .isEqualTo(1);
+    assertThat(
+            tester.callFunction(
+                UnsafeSanitizedContentOrdainer.ordainAsSafe("a", ContentKind.HTML, Dir.RTL)))
+        .isEqualTo(-1);
+    assertThat(
+            tester.callFunction(
+                UnsafeSanitizedContentOrdainer.ordainAsSafe("a", ContentKind.HTML, Dir.NEUTRAL)))
         .isEqualTo(0);
-  }
-
-  @Test
-  public void testComputeForJsSrc() {
-    BidiTextDirFunction bidiTextDirFunction = new BidiTextDirFunction();
-
-    JsExpr textExpr = new JsExpr("TEXT_JS_CODE", Integer.MAX_VALUE);
-    assertThat(bidiTextDirFunction.computeForJsSrc(ImmutableList.of(textExpr)))
-        .isEqualTo(new JsExpr("soy.$$bidiTextDir(TEXT_JS_CODE)", Integer.MAX_VALUE));
-
-    JsExpr isHtmlExpr = new JsExpr("IS_HTML_JS_CODE", Integer.MAX_VALUE);
-    assertThat(bidiTextDirFunction.computeForJsSrc(ImmutableList.of(textExpr, isHtmlExpr)))
-        .isEqualTo(
-            new JsExpr("soy.$$bidiTextDir(TEXT_JS_CODE, IS_HTML_JS_CODE)", Integer.MAX_VALUE));
-  }
-
-  @Test
-  public void testComputeForPySrc() {
-    BidiTextDirFunction bidiTextDirFunction = new BidiTextDirFunction();
-
-    PyExpr data = new PyStringExpr("'data'");
-    assertThat(bidiTextDirFunction.computeForPySrc(ImmutableList.of(data)).getText())
-        .isEqualTo("bidi.text_dir('data')");
-
-    PyExpr isHtml = new PyExpr("is_html", Integer.MAX_VALUE);
-    assertThat(bidiTextDirFunction.computeForPySrc(ImmutableList.of(data, isHtml)).getText())
-        .isEqualTo("bidi.text_dir('data', is_html)");
   }
 }

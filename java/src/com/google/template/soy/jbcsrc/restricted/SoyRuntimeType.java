@@ -25,16 +25,15 @@ import com.google.common.base.Optional;
 import com.google.common.cache.CacheBuilder;
 import com.google.common.cache.CacheLoader;
 import com.google.common.cache.LoadingCache;
-import com.google.template.soy.base.SoyBackendKind;
-import com.google.template.soy.data.SanitizedContent;
+import com.google.protobuf.Descriptors.Descriptor;
 import com.google.template.soy.data.restricted.BooleanData;
 import com.google.template.soy.data.restricted.FloatData;
+import com.google.template.soy.internal.proto.JavaQualifiedNames;
 import com.google.template.soy.types.BoolType;
 import com.google.template.soy.types.FloatType;
 import com.google.template.soy.types.IntType;
 import com.google.template.soy.types.ListType;
 import com.google.template.soy.types.NullType;
-import com.google.template.soy.types.SanitizedType;
 import com.google.template.soy.types.SoyProtoEnumType;
 import com.google.template.soy.types.SoyProtoType;
 import com.google.template.soy.types.SoyType;
@@ -109,6 +108,13 @@ public abstract class SoyRuntimeType {
       return primitive.get().box();
     }
     switch (soyType.getKind()) {
+      case ATTRIBUTES:
+      case CSS:
+      case URI:
+      case HTML:
+      case JS:
+      case TRUSTED_RESOURCE_URI:
+        return new BoxedSoyType(soyType, BytecodeUtils.SANITIZED_CONTENT_TYPE);
       case LIST:
         return new BoxedSoyType(soyType, BytecodeUtils.SOY_LIST_TYPE);
       case LEGACY_OBJECT_MAP:
@@ -117,6 +123,10 @@ public abstract class SoyRuntimeType {
         return new BoxedSoyType(soyType, BytecodeUtils.SOY_MAP_TYPE);
       case RECORD:
         return new BoxedSoyType(soyType, BytecodeUtils.SOY_RECORD_TYPE);
+      case VE:
+        return new BoxedSoyType(soyType, BytecodeUtils.SOY_VISUAL_ELEMENT_TYPE);
+      case VE_DATA:
+        return new BoxedSoyType(soyType, BytecodeUtils.SOY_VISUAL_ELEMENT_DATA_TYPE);
       case UNION:
         {
           // unions generally don't have a runtime type except in 2 special cases
@@ -178,15 +188,18 @@ public abstract class SoyRuntimeType {
       case HTML:
       case JS:
       case TRUSTED_RESOURCE_URI:
-        return sanitizedType((SanitizedType) soyType);
+        // sanitized strings cannot be unboxed
+        return null;
       case PROTO:
-        return protoType((SoyProtoType) soyType);
+        return soyTypeFromProto((SoyProtoType) soyType);
       case LIST:
         // We have some minor support for unboxed lists
         return new PrimitiveSoyType(soyType, BytecodeUtils.LIST_TYPE, BytecodeUtils.SOY_LIST_TYPE);
       case LEGACY_OBJECT_MAP:
       case MAP:
       case RECORD:
+      case VE:
+      case VE_DATA:
         // no unboxed representation at all.  We could add something for these, but there is
         // currently not much point.
         return null;
@@ -233,17 +246,14 @@ public abstract class SoyRuntimeType {
     throw new AssertionError("can't map " + soyType + " to an unboxed soy runtime type");
   }
 
-  private static PrimitiveSoyType protoType(SoyProtoType soyType) {
+  private static PrimitiveSoyType soyTypeFromProto(SoyProtoType soyType) {
     return new PrimitiveSoyType(
-        soyType,
-        Type.getType(
-            'L' + soyType.getNameForBackend(SoyBackendKind.JBC_SRC).replace('.', '/') + ';'),
-        BytecodeUtils.SOY_PROTO_VALUE_TYPE);
+        soyType, protoType(soyType.getDescriptor()), BytecodeUtils.SOY_PROTO_VALUE_TYPE);
   }
 
-  private static PrimitiveSoyType sanitizedType(SanitizedType soyType) {
-    return new PrimitiveSoyType(
-        soyType, BytecodeUtils.STRING_TYPE, Type.getType(SanitizedContent.class));
+  /** Returns the runtime type for the message correspdoning to the given descriptor.. */
+  public static Type protoType(Descriptor descriptor) {
+    return Type.getType('L' + JavaQualifiedNames.getClassName(descriptor).replace('.', '/') + ';');
   }
 
   private static PrimitiveSoyType enumType(SoyProtoEnumType enumType) {

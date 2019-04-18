@@ -20,7 +20,6 @@ import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Iterables;
-import com.google.common.collect.Lists;
 import com.google.common.collect.Maps;
 import com.google.template.soy.base.SourceLocation;
 import com.google.template.soy.base.internal.BaseUtils;
@@ -29,18 +28,17 @@ import com.google.template.soy.base.internal.SanitizedContentKind;
 import com.google.template.soy.basetree.CopyState;
 import com.google.template.soy.error.ErrorReporter;
 import com.google.template.soy.error.SoyErrorKind;
+import com.google.template.soy.exprtree.ExprRootNode;
+import com.google.template.soy.soytree.SoyNode.ExprHolderNode;
 import com.google.template.soy.soytree.SoyNode.RenderUnitNode;
-import com.google.template.soy.soytree.defn.HeaderParam;
-import com.google.template.soy.soytree.defn.InjectedParam;
 import com.google.template.soy.soytree.defn.TemplateHeaderVarDefn;
 import com.google.template.soy.soytree.defn.TemplateParam;
-import com.google.template.soy.soytree.defn.TemplateParam.DeclLoc;
 import com.google.template.soy.soytree.defn.TemplateStateVar;
 import java.util.Collection;
-import java.util.List;
+import java.util.HashSet;
 import java.util.Map;
+import java.util.Set;
 import javax.annotation.Nullable;
-import javax.annotation.concurrent.Immutable;
 
 /**
  * Node representing a template.
@@ -48,7 +46,8 @@ import javax.annotation.concurrent.Immutable;
  * <p>Important: Do not use outside of Soy code (treat as superpackage-private).
  *
  */
-public abstract class TemplateNode extends AbstractBlockCommandNode implements RenderUnitNode {
+public abstract class TemplateNode extends AbstractBlockCommandNode
+    implements RenderUnitNode, ExprHolderNode {
 
   /** Priority for delegate templates. */
   public enum Priority {
@@ -90,22 +89,24 @@ public abstract class TemplateNode extends AbstractBlockCommandNode implements R
    * are not in a delegate package are given priority 0 (lowest). Delegate templates in a delegate
    * package are given priority 1. There is currently no syntax for the user to override these
    * default priority values.
+   *
+   * <p>TODO(lukes): merge this object with SoyFileNode. The track nearly identical information.
    */
-  @Immutable
   public static class SoyFileHeaderInfo {
     /** A header with no aliases, used for parsing non-files. */
     public static final SoyFileHeaderInfo EMPTY = new SoyFileHeaderInfo("sample.ns");
 
     /** Map from aliases to namespaces for this file. */
-    public final ImmutableMap<String, String> aliasToNamespaceMap;
+    private final ImmutableMap<String, String> aliasToNamespaceMap;
 
     /** Map from aliases to namespaces for this file. */
-    public final ImmutableList<AliasDeclaration> aliasDeclarations;
+    private final ImmutableList<AliasDeclaration> aliasDeclarations;
 
-    @Nullable public final String delPackageName;
-    final Priority priority;
-    @Nullable public final String namespace;
-    public final AutoescapeMode defaultAutoescapeMode;
+    @Nullable private final String delPackageName;
+    private final Priority priority;
+    @Nullable private final String namespace;
+
+    private final Set<String> usedAliases;
 
     public SoyFileHeaderInfo(
         ErrorReporter errorReporter,
@@ -115,33 +116,35 @@ public abstract class TemplateNode extends AbstractBlockCommandNode implements R
       this(
           delpackageName == null ? null : delpackageName.identifier(),
           namespaceDeclaration.getNamespace(),
-          AutoescapeMode.STRICT,
           createAliasMap(errorReporter, namespaceDeclaration, aliases),
           ImmutableList.copyOf(aliases));
     }
 
     @VisibleForTesting
     public SoyFileHeaderInfo(String namespace) {
-      this(
-          null,
-          namespace,
-          AutoescapeMode.NONCONTEXTUAL,
-          ImmutableMap.<String, String>of(),
-          ImmutableList.<AliasDeclaration>of());
+      this(null, namespace, ImmutableMap.of(), ImmutableList.of());
     }
 
     private SoyFileHeaderInfo(
         @Nullable String delPackageName,
         String namespace,
-        AutoescapeMode defaultAutoescapeMode,
         ImmutableMap<String, String> aliasToNamespaceMap,
         ImmutableList<AliasDeclaration> aliasDeclarations) {
       this.delPackageName = delPackageName;
       this.priority = (delPackageName == null) ? Priority.STANDARD : Priority.HIGH_PRIORITY;
       this.namespace = namespace;
-      this.defaultAutoescapeMode = defaultAutoescapeMode;
       this.aliasToNamespaceMap = aliasToNamespaceMap;
       this.aliasDeclarations = aliasDeclarations;
+      this.usedAliases = new HashSet<>();
+    }
+
+    private SoyFileHeaderInfo(SoyFileHeaderInfo orig) {
+      this.delPackageName = orig.delPackageName;
+      this.priority = orig.priority;
+      this.namespace = orig.namespace;
+      this.aliasToNamespaceMap = orig.aliasToNamespaceMap;
+      this.aliasDeclarations = orig.aliasDeclarations;
+      this.usedAliases = new HashSet<>(orig.usedAliases);
     }
 
     /** Resolves an potentially-aliased name against the aliases in this file. */
@@ -158,7 +161,34 @@ public abstract class TemplateNode extends AbstractBlockCommandNode implements R
       }
 
       String alias = aliasToNamespaceMap.get(firstIdent);
+      if (alias != null) {
+        usedAliases.add(firstIdent);
+      }
       return alias == null ? fullName : alias + remainder;
+    }
+
+    public boolean hasAlias(String alias) {
+      return aliasToNamespaceMap.containsKey(alias);
+    }
+
+    public boolean aliasUsed(String alias) {
+      return usedAliases.contains(alias);
+    }
+
+    public String getNamespace() {
+      return namespace;
+    }
+
+    public String getDelPackageName() {
+      return delPackageName;
+    }
+
+    public ImmutableList<AliasDeclaration> getAliases() {
+      return aliasDeclarations;
+    }
+
+    public Priority getPriority() {
+      return priority;
     }
 
     private static ImmutableMap<String, String> createAliasMap(
@@ -186,6 +216,10 @@ public abstract class TemplateNode extends AbstractBlockCommandNode implements R
       }
       return ImmutableMap.copyOf(map);
     }
+
+    public SoyFileHeaderInfo copy() {
+      return new SoyFileHeaderInfo(this);
+    }
   }
 
   // -----------------------------------------------------------------------------------------------
@@ -197,17 +231,17 @@ public abstract class TemplateNode extends AbstractBlockCommandNode implements R
   /** This template's name. */
   private final String templateName;
 
-  /** This template's partial name. Only applicable for V2. */
-  @Nullable private final String partialTemplateName;
+  /** This template's partial name. */
+  private final String partialTemplateName;
 
   /** Visibility of this template. */
   private final Visibility visibility;
 
-  /** The mode of autoescaping for this template. */
-  private final AutoescapeMode autoescapeMode;
+  /** Whitespace handling mode for this template. */
+  private final WhitespaceMode whitespaceMode;
 
-  /** Strict mode context. Nonnull iff autoescapeMode is strict. */
-  @Nullable private final SanitizedContentKind contentKind;
+  /** Strict mode context. Nonnull. */
+  private final SanitizedContentKind contentKind;
 
   /** Required CSS namespaces. */
   private final ImmutableList<String> requiredCssNamespaces;
@@ -224,22 +258,18 @@ public abstract class TemplateNode extends AbstractBlockCommandNode implements R
   /** If the template is using strict html mode. */
   private final boolean strictHtml;
 
-  /** Whether or not this template is marked as deprecatedV1=true. */
-  private final boolean isDeprecatedV1;
-
   /** The params from template header or SoyDoc. */
-  private ImmutableList<TemplateParam> params;
+  private final ImmutableList<TemplateParam> params;
 
   /** The injected params from template header. */
   private ImmutableList<TemplateParam> injectedParams;
 
-  /** The state variables from template header. */
-  private ImmutableList<TemplateStateVar> stateVars;
-
   private int maxLocalVariableTableSize = -1;
 
-  // TODO(user): Remove.
+  // TODO(b/19406885): Remove.
   private final String commandText;
+
+  private final SourceLocation openTagLocation;
 
   /**
    * Main constructor. This is package-private because Template*Node instances should be built using
@@ -250,22 +280,19 @@ public abstract class TemplateNode extends AbstractBlockCommandNode implements R
    * @param soyFileHeaderInfo Info from the containing Soy file's header declarations.
    * @param visibility Visibility of this template.
    * @param params The params from template header or SoyDoc. Null if no decls and no SoyDoc.
-   * @param stateVars The state variables from the template header.
    */
   TemplateNode(
       TemplateNodeBuilder nodeBuilder,
       String cmdName,
       SoyFileHeaderInfo soyFileHeaderInfo,
       Visibility visibility,
-      @Nullable ImmutableList<TemplateParam> params,
-      ImmutableList<TemplateStateVar> stateVars) {
+      @Nullable ImmutableList<TemplateParam> params) {
     super(nodeBuilder.getId(), nodeBuilder.sourceLocation, cmdName);
-    this.isDeprecatedV1 = nodeBuilder.isMarkedDeprecatedV1;
     this.soyFileHeaderInfo = soyFileHeaderInfo;
     this.templateName = nodeBuilder.getTemplateName();
     this.partialTemplateName = nodeBuilder.getPartialTemplateName();
     this.visibility = visibility;
-    this.autoescapeMode = nodeBuilder.getAutoescapeMode();
+    this.whitespaceMode = nodeBuilder.getWhitespaceMode();
     this.contentKind = nodeBuilder.getContentKind();
     this.requiredCssNamespaces = nodeBuilder.getRequiredCssNamespaces();
     this.cssBaseNamespace = nodeBuilder.getCssBaseNamespace();
@@ -287,35 +314,44 @@ public abstract class TemplateNode extends AbstractBlockCommandNode implements R
     }
     this.params = regularParams.build();
     this.injectedParams = injectedParams.build();
-    this.stateVars = stateVars;
     this.commandText = nodeBuilder.getCmdText().trim();
+    this.openTagLocation = nodeBuilder.openTagLocation;
   }
 
   /**
    * Copy constructor.
+   *
    * @param orig The node to copy.
    */
   protected TemplateNode(TemplateNode orig, CopyState copyState) {
     super(orig, copyState);
-    this.soyFileHeaderInfo = orig.soyFileHeaderInfo; // immutable
+    this.soyFileHeaderInfo = orig.soyFileHeaderInfo.copy();
     this.templateName = orig.templateName;
     this.partialTemplateName = orig.partialTemplateName;
     this.visibility = orig.visibility;
-    this.autoescapeMode = orig.autoescapeMode;
+    this.whitespaceMode = orig.whitespaceMode;
     this.contentKind = orig.contentKind;
     this.requiredCssNamespaces = orig.requiredCssNamespaces;
     this.cssBaseNamespace = orig.cssBaseNamespace;
     this.soyDoc = orig.soyDoc;
     this.soyDocDesc = orig.soyDocDesc;
-    // TODO(lukes): params and injectedParams are not really immutable, just mostly.  Consider
-    // cloning them here and modifying SoyTreeUtils.cloneNode to reassign these as well.
-    this.params = orig.params; // immutable
-    this.injectedParams = orig.injectedParams;
-    this.stateVars = orig.stateVars;
+    this.params = copyParams(orig.params, copyState);
+    this.injectedParams = copyParams(orig.injectedParams, copyState);
     this.maxLocalVariableTableSize = orig.maxLocalVariableTableSize;
     this.strictHtml = orig.strictHtml;
     this.commandText = orig.commandText;
-    this.isDeprecatedV1 = orig.isDeprecatedV1;
+    this.openTagLocation = orig.openTagLocation;
+  }
+
+  private static ImmutableList<TemplateParam> copyParams(
+      ImmutableList<TemplateParam> orig, CopyState copyState) {
+    ImmutableList.Builder<TemplateParam> newParams = ImmutableList.builder();
+    for (TemplateParam prev : orig) {
+      TemplateParam next = prev.copy();
+      newParams.add(next);
+      copyState.updateRefs(prev, next);
+    }
+    return newParams.build();
   }
 
   /** Returns info from the containing Soy file's header declarations. */
@@ -336,14 +372,9 @@ public abstract class TemplateNode extends AbstractBlockCommandNode implements R
     return templateName;
   }
 
-  /** Returns this template's partial name. Only applicable for V2 (null for V1). */
-  @Nullable
+  /** Returns this template's partial name. */
   public String getPartialTemplateName() {
     return partialTemplateName;
-  }
-
-  public boolean isDeprecatedV1() {
-    return isDeprecatedV1;
   }
 
   /** Returns the visibility of this template. */
@@ -351,21 +382,35 @@ public abstract class TemplateNode extends AbstractBlockCommandNode implements R
     return visibility;
   }
 
-  /** Returns the mode of autoescaping. */
-  public AutoescapeMode getAutoescapeMode() {
-    return autoescapeMode;
+  /** The location of the {(del)template ...} */
+  public SourceLocation getOpenTagLocation() {
+    return this.openTagLocation;
+  }
+
+  /** Returns the whitespace handling mode for this template. */
+  public WhitespaceMode getWhitespaceMode() {
+    return whitespaceMode;
+  }
+
+  private String getDeclName(TemplateHeaderVarDefn headerVar) {
+    if (headerVar instanceof TemplateStateVar) {
+      return "@state";
+    } else if (headerVar.isInjected()) {
+      return "@inject";
+    } else {
+      return "@param";
+    }
   }
 
   private boolean computeStrictHtmlMode(boolean strictHtmlDisabled) {
     if (strictHtmlDisabled) {
       // Use the value that is explicitly set in template.
       return false;
-    } else if (contentKind != SanitizedContentKind.HTML
-        || autoescapeMode != AutoescapeMode.STRICT) {
-      // Non-HTML or non-strict-autoescaping templates couldn't be strictHtml.
+    } else if (contentKind != SanitizedContentKind.HTML) {
+      // Non-HTML templates couldn't be strictHtml.
       return false;
     } else {
-      // Strict autoescaping HTML templates have strictHtml enabled by default.
+      // HTML templates have strictHtml enabled by default.
       return true;
     }
   }
@@ -375,9 +420,8 @@ public abstract class TemplateNode extends AbstractBlockCommandNode implements R
     return strictHtml;
   }
 
-  /** Returns the content kind for strict autoescaping. Nonnull iff autoescapeMode is strict. */
+  /** Returns the content kind for strict autoescaping. */
   @Override
-  @Nullable
   public SanitizedContentKind getContentKind() {
     return contentKind;
   }
@@ -419,12 +463,6 @@ public abstract class TemplateNode extends AbstractBlockCommandNode implements R
   public void clearSoyDocStrings() {
     soyDoc = null;
     soyDocDesc = null;
-
-    List<TemplateParam> newParams = Lists.newArrayListWithCapacity(params.size());
-    for (TemplateParam origParam : params) {
-      newParams.add(origParam.copyEssential());
-    }
-    params = ImmutableList.copyOf(newParams);
   }
 
   /** Returns the SoyDoc, or null. */
@@ -433,13 +471,13 @@ public abstract class TemplateNode extends AbstractBlockCommandNode implements R
     return soyDoc;
   }
 
-  /** Returns the description portion of the SoyDoc (before @param tags), or null. */
+  /** Returns the description portion of the SoyDoc, or null. */
   @Nullable
   public String getSoyDocDesc() {
     return soyDocDesc;
   }
 
-  /** Returns the params from template header or SoyDoc. */
+  /** Returns the params from template header. */
   public ImmutableList<TemplateParam> getParams() {
     return params;
   }
@@ -449,13 +487,7 @@ public abstract class TemplateNode extends AbstractBlockCommandNode implements R
     return injectedParams;
   }
 
-  /** Returns the state variables from template header. */
-  public ImmutableList<TemplateStateVar> getStateVars() {
-    return stateVars;
-  }
-
-  /** Returns all params from template header or SoyDoc, both regular and injected. */
-  @Nullable
+  /** Returns all params from template header, both regular and injected. */
   public Iterable<TemplateParam> getAllParams() {
     return Iterables.concat(params, injectedParams);
   }
@@ -471,6 +503,30 @@ public abstract class TemplateNode extends AbstractBlockCommandNode implements R
   }
 
   @Override
+  public ImmutableList<ExprRootNode> getExprList() {
+    ImmutableList.Builder<ExprRootNode> exprs = ImmutableList.builder();
+    for (TemplateParam param : getParams()) {
+      ExprRootNode defaultValue = param.defaultValue();
+      if (defaultValue != null) {
+        exprs.add(defaultValue);
+      }
+    }
+    return exprs.build();
+  }
+
+  public void addCspNonceParam(TemplateParam cspNonce) {
+    injectedParams =
+        ImmutableList.<TemplateParam>builder().addAll(injectedParams).add(cspNonce).build();
+  }
+
+  protected ImmutableList<? extends TemplateHeaderVarDefn> getHeaderParamsForSourceString() {
+    return new ImmutableList.Builder<TemplateHeaderVarDefn>()
+        .addAll(params)
+        .addAll(injectedParams)
+        .build();
+  }
+
+  @Override
   public String toSourceString() {
     StringBuilder sb = new StringBuilder();
 
@@ -482,16 +538,7 @@ public abstract class TemplateNode extends AbstractBlockCommandNode implements R
     // Begin tag.
     sb.append(getTagString()).append("\n");
 
-    // Header.
-    // Gather up all the @params declared in the template header (not in the SoyDoc).
-    ImmutableList.Builder<TemplateParam> headerOnlyParams = ImmutableList.builder();
-    for (TemplateParam headerParam : params) {
-      if (headerParam.declLoc().equals(DeclLoc.HEADER)) {
-        headerOnlyParams.add(headerParam);
-      }
-    }
-    appendHeaderVarDecl(headerOnlyParams.build(), sb);
-    appendHeaderVarDecl(stateVars, sb);
+    appendHeaderVarDecl(getHeaderParamsForSourceString(), sb);
 
     // Body.
     // If first or last char of template body is a space, must be turned into '{sp}'.
@@ -516,24 +563,19 @@ public abstract class TemplateNode extends AbstractBlockCommandNode implements R
   }
 
   /** Add the Soy template syntax that declares `headerVar` to the string builder. */
-  private static <T extends TemplateHeaderVarDefn> void appendHeaderVarDecl(
-      ImmutableList<T> headerVars, StringBuilder sb) {
-    final ImmutableMap<Class<?>, String> declNameMap =
-        ImmutableMap.of(
-            HeaderParam.class, "@param",
-            InjectedParam.class, "@inject",
-            TemplateStateVar.class, "@state");
+  protected void appendHeaderVarDecl(
+      ImmutableList<? extends TemplateHeaderVarDefn> headerVars, StringBuilder sb) {
 
     for (TemplateHeaderVarDefn headerVar : headerVars) {
-      // Ignore any unknown declaration type.
-      if (!declNameMap.containsKey(headerVar.getClass())) {
-        continue;
-      }
-      sb.append("  {").append(declNameMap.get(headerVar.getClass()));
+      sb.append("  {").append(getDeclName(headerVar));
       if (!headerVar.isRequired()) {
         sb.append("?");
       }
-      sb.append(" ").append(headerVar.name()).append(": ").append(headerVar.type()).append("}");
+      sb.append(" ")
+          .append(headerVar.name())
+          .append(": ")
+          .append(headerVar.hasType() ? headerVar.type() : headerVar.getTypeNode())
+          .append("}");
       if (headerVar.desc() != null) {
         sb.append("  /** ").append(headerVar.desc()).append(" */");
       }
@@ -546,22 +588,12 @@ public abstract class TemplateNode extends AbstractBlockCommandNode implements R
    * template.
    */
   public StackTraceElement createStackTraceElement(SourceLocation srcLocation) {
-    if (partialTemplateName == null) {
-      // V1 soy templates.
-      return new StackTraceElement(
-          /* declaringClass= */ "(UnknownSoyNamespace)",
-          /* methodName= */ templateName,
-          srcLocation.getFileName(),
-          srcLocation.getBeginLine());
-    } else {
-      // V2 soy templates.
-      return new StackTraceElement(
-          /* declaringClass= */ soyFileHeaderInfo.namespace,
-          // The partial template name begins with a '.' that causes the stack trace element to
-          // print "namespace..templateName" otherwise.
-          /* methodName= */ partialTemplateName.substring(1),
-          srcLocation.getFileName(),
-          srcLocation.getBeginLine());
-    }
+    return new StackTraceElement(
+        /* declaringClass= */ soyFileHeaderInfo.namespace,
+        // The partial template name begins with a '.' that causes the stack trace element to
+        // print "namespace..templateName" otherwise.
+        /* methodName= */ partialTemplateName.substring(1),
+        srcLocation.getFileName(),
+        srcLocation.getBeginLine());
   }
 }

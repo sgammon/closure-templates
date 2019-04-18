@@ -25,6 +25,7 @@ import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.protobuf.ByteString;
 import com.google.template.soy.SoyFileSetParser;
+import com.google.template.soy.SoyFileSetParser.ParseResult;
 import com.google.template.soy.SoyFileSetParserBuilder;
 import com.google.template.soy.data.LoggingAdvisingAppendable;
 import com.google.template.soy.data.LoggingAdvisingAppendable.BufferingAppendable;
@@ -150,7 +151,7 @@ public final class ProtoSupportTest {
             "{@param? proto : example.ExampleExtendable}",
             "{let $foo : $proto?.someEmbeddedMessage /}",
             "{$foo ? 'true' : 'false'}");
-    tester.rendersAs("false", ImmutableMap.<String, Object>of());
+    tester.rendersAs("false", ImmutableMap.of());
     tester.rendersAs("false", ImmutableMap.of("proto", ExampleExtendable.getDefaultInstance()));
     tester.rendersAs(
         "true",
@@ -167,7 +168,7 @@ public final class ProtoSupportTest {
             "{@param? proto : example.ExampleExtendable}",
             "{let $foo : $proto?.someEmbeddedMessage?.someEmbeddedString /}",
             "{$foo}");
-    tester.rendersAs("null", ImmutableMap.<String, Object>of());
+    tester.rendersAs("null", ImmutableMap.of());
     tester.rendersAs("null", ImmutableMap.of("proto", ExampleExtendable.getDefaultInstance()));
     tester.rendersAs(
         "foo",
@@ -185,7 +186,7 @@ public final class ProtoSupportTest {
             "{@param? proto : example.ExampleExtendable}",
             "{let $foo : $proto?.someEmbeddedMessage?.someEmbeddedString /}",
             "{$foo}");
-    tester.rendersAs("null", ImmutableMap.<String, Object>of());
+    tester.rendersAs("null", ImmutableMap.of());
     tester.rendersAs("null", ImmutableMap.of("proto", ExampleExtendable.getDefaultInstance()));
     tester.rendersAs(
         "foo",
@@ -273,10 +274,13 @@ public final class ProtoSupportTest {
             "{/template}");
     SoyFileSetParser parser =
         SoyFileSetParserBuilder.forFileContents(file).typeRegistry(types).build();
+    ParseResult parseResult = parser.parse();
     CompiledTemplates templates =
         BytecodeCompiler.compile(
-                parser.parse().registry(),
-                false,
+                parseResult.registry(),
+                parseResult.fileSet(),
+
+                /*developmentMode=*/ false,
                 ErrorReporter.exploding(),
                 parser.soyFileSuppliers(),
                 types)

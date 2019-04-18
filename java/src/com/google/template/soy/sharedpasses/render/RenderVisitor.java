@@ -19,7 +19,6 @@ package com.google.template.soy.sharedpasses.render;
 import static com.google.common.base.Preconditions.checkNotNull;
 
 import com.google.common.base.Optional;
-import com.google.common.base.Predicate;
 import com.google.common.base.Supplier;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
@@ -50,6 +49,7 @@ import com.google.template.soy.msgs.SoyMsgBundle;
 import com.google.template.soy.shared.RangeArgs;
 import com.google.template.soy.shared.SoyCssRenamingMap;
 import com.google.template.soy.shared.SoyIdRenamingMap;
+import com.google.template.soy.shared.internal.DelTemplateSelector;
 import com.google.template.soy.shared.internal.SharedRuntime;
 import com.google.template.soy.shared.restricted.SoyJavaPrintDirective;
 import com.google.template.soy.shared.restricted.SoyPrintDirective;
@@ -83,9 +83,7 @@ import com.google.template.soy.soytree.SwitchCaseNode;
 import com.google.template.soy.soytree.SwitchDefaultNode;
 import com.google.template.soy.soytree.SwitchNode;
 import com.google.template.soy.soytree.TemplateDelegateNode;
-import com.google.template.soy.soytree.TemplateDelegateNode.DelTemplateKey;
 import com.google.template.soy.soytree.TemplateNode;
-import com.google.template.soy.soytree.TemplateRegistry;
 import com.google.template.soy.soytree.VeLogNode;
 import com.google.template.soy.soytree.defn.LoopVar;
 import com.google.template.soy.soytree.defn.TemplateParam;
@@ -95,6 +93,7 @@ import java.io.IOException;
 import java.util.ArrayDeque;
 import java.util.Deque;
 import java.util.List;
+import java.util.function.Predicate;
 import javax.annotation.Nullable;
 
 /**
@@ -110,9 +109,8 @@ public class RenderVisitor extends AbstractSoyNodeVisitor<Void> {
   /** Factory for creating an instance of EvalVisitor. */
   protected final EvalVisitorFactory evalVisitorFactory;
 
-  /** The bundle containing all the templates that may be rendered. */
-  protected final TemplateRegistry templateRegistry;
-
+  protected final ImmutableMap<String, TemplateNode> basicTemplates;
+  protected final DelTemplateSelector<TemplateDelegateNode> deltemplates;
   /** The current template data. */
   protected final SoyRecord data;
 
@@ -164,8 +162,6 @@ public class RenderVisitor extends AbstractSoyNodeVisitor<Void> {
   /**
    * @param evalVisitorFactory Factory for creating an instance of EvalVisitor.
    * @param outputBuf The Appendable to append the output to.
-   * @param templateRegistry A registry of all templates. Should never be null (except in some unit
-   *     tests).
    * @param data The current template data.
    * @param ijData The current injected data.
    * @param activeDelPackageSelector The predicate for testing whether a given delpackage is active.
@@ -179,7 +175,8 @@ public class RenderVisitor extends AbstractSoyNodeVisitor<Void> {
   public RenderVisitor(
       EvalVisitorFactory evalVisitorFactory,
       Appendable outputBuf,
-      @Nullable TemplateRegistry templateRegistry,
+      ImmutableMap<String, TemplateNode> basicTemplates,
+      DelTemplateSelector<TemplateDelegateNode> deltemplates,
       SoyRecord data,
       @Nullable SoyRecord ijData,
       @Nullable Predicate<String> activeDelPackageSelector,
@@ -191,7 +188,8 @@ public class RenderVisitor extends AbstractSoyNodeVisitor<Void> {
     checkNotNull(data);
 
     this.evalVisitorFactory = evalVisitorFactory;
-    this.templateRegistry = templateRegistry;
+    this.basicTemplates = checkNotNull(basicTemplates);
+    this.deltemplates = checkNotNull(deltemplates);
     this.data = data;
     this.ijData = ijData;
     this.activeDelPackageSelector = activeDelPackageSelector;
@@ -242,7 +240,8 @@ public class RenderVisitor extends AbstractSoyNodeVisitor<Void> {
     return new RenderVisitor(
         evalVisitorFactory,
         outputBuf,
-        templateRegistry,
+        basicTemplates,
+        deltemplates,
         data,
         ijData,
         activeDelPackageSelector,
@@ -262,8 +261,7 @@ public class RenderVisitor extends AbstractSoyNodeVisitor<Void> {
   }
 
   /** A private helper to render templates with optimized type checking. */
-  private void renderTemplate(
-      TemplateNode template, ImmutableList<TemplateParam> paramsToTypeCheck) {
+  private void renderTemplate(TemplateNode template, Predicate<String> paramsToTypeCheck) {
     env = Environment.create(template, data, ijData);
     checkStrictParamTypes(template, paramsToTypeCheck);
     visitChildren(template);
@@ -278,7 +276,7 @@ public class RenderVisitor extends AbstractSoyNodeVisitor<Void> {
     // check all params of the node. This callpath should only be called in the case of external
     // calls into soy (e.g. RenderVisitor.exec(node)).  For calls to templates from soy, the
     // renderTemplate() method is called directly.
-    renderTemplate(node, node.getParams());
+    renderTemplate(node, /*paramsToTypeCheck=*/ arg -> true);
   }
 
   @Override
@@ -301,7 +299,7 @@ public class RenderVisitor extends AbstractSoyNodeVisitor<Void> {
       // Escape the entire message with the required directives.
       SoyValue wholeMsg = StringData.forValue(popOutputBuf().toString());
       for (SoyPrintDirective directive : node.getEscapingDirectives()) {
-        wholeMsg = applyDirective(directive, wholeMsg, ImmutableList.<SoyValue>of(), node);
+        wholeMsg = applyDirective(directive, wholeMsg, ImmutableList.of(), node);
       }
       append(currOutputBuf, wholeMsg.stringValue());
     }
@@ -475,7 +473,7 @@ public class RenderVisitor extends AbstractSoyNodeVisitor<Void> {
   @Override
   protected void visitCallBasicNode(CallBasicNode node) {
 
-    TemplateNode callee = templateRegistry.getBasicTemplate(node.getCalleeName());
+    TemplateNode callee = basicTemplates.get(node.getCalleeName());
     if (callee == null) {
       throw RenderException.createWithSource(
           "Attempting to render undefined template '" + node.getCalleeName() + "'.", node);
@@ -513,11 +511,10 @@ public class RenderVisitor extends AbstractSoyNodeVisitor<Void> {
             node);
       }
     }
-    DelTemplateKey delegateKey = DelTemplateKey.create(node.getDelCalleeName(), variant);
-
     TemplateDelegateNode callee;
     try {
-      callee = templateRegistry.selectDelTemplate(delegateKey, activeDelPackageSelector);
+      callee =
+          deltemplates.selectTemplate(node.getDelCalleeName(), variant, activeDelPackageSelector);
     } catch (IllegalArgumentException e) {
       throw RenderException.createWithSource(e.getMessage(), e, node);
     }
@@ -538,69 +535,10 @@ public class RenderVisitor extends AbstractSoyNodeVisitor<Void> {
     }
   }
 
-  @SuppressWarnings("ConstantConditions") // for IntelliJ
   private void visitCallNodeHelper(CallNode node, TemplateNode callee) {
 
     // ------ Build the call data. ------
-    SoyRecord dataToPass;
-    if (node.isPassingAllData()) {
-      dataToPass = data;
-    } else if (node.isPassingData()) {
-      SoyValue dataRefValue = eval(node.getDataExpr(), node);
-      if (!(dataRefValue instanceof SoyRecord)) {
-        throw RenderException.create(
-                "In 'call' command "
-                    + node.toSourceString()
-                    + ", the data reference does not resolve to a SoyRecord.")
-            .addStackTraceElement(node);
-      }
-      dataToPass = (SoyRecord) dataRefValue;
-    } else {
-      dataToPass = null;
-    }
-
-    SoyRecord callData;
-
-    int numChildren = node.numChildren();
-    if (numChildren == 0) {
-      // --- Cases 1 and 2: Not passing params. ---
-      if (dataToPass == null) {
-        // Case 1: Not passing data and not passing params.
-        callData = ParamStore.EMPTY_INSTANCE;
-      } else {
-        // Case 2: Passing data and not passing params.
-        callData = dataToPass;
-      }
-
-    } else {
-      // --- Cases 3 and 4: Passing params. ---
-      ParamStore mutableCallData;
-
-      if (dataToPass == null) {
-        // Case 3: Not passing data and passing params.
-        mutableCallData = new BasicParamStore(numChildren);
-      } else {
-        // Case 4: Passing data and passing params.
-        mutableCallData = new AugmentedParamStore(dataToPass, numChildren);
-      }
-
-      for (CallParamNode child : node.getChildren()) {
-
-        if (child instanceof CallParamValueNode) {
-          mutableCallData.setField(
-              child.getKey().identifier(), lazyEval(((CallParamValueNode) child).getExpr(), child));
-
-        } else if (child instanceof CallParamContentNode) {
-          mutableCallData.setField(
-              child.getKey().identifier(), renderRenderUnitNode((CallParamContentNode) child));
-
-        } else {
-          throw new AssertionError();
-        }
-      }
-
-      callData = mutableCallData;
-    }
+    SoyRecord callData = createCallParams(node);
 
     // ------ Render the callee template with the callData built above. ------
 
@@ -608,7 +546,7 @@ public class RenderVisitor extends AbstractSoyNodeVisitor<Void> {
       // No escaping at the call site -- render directly into the output buffer.
       RenderVisitor rv = this.createHelperInstance(currOutputBuf, callData);
       try {
-        rv.renderTemplate(callee, node.getParamsToRuntimeCheck(callee));
+        rv.renderTemplate(callee, node.getParamsToRuntimeCheck(callee.getTemplateName()));
       } catch (RenderException re) {
         // The {call .XXX} failed to render - a new partial stack trace element is added to capture
         // this template call.
@@ -623,7 +561,7 @@ public class RenderVisitor extends AbstractSoyNodeVisitor<Void> {
       StringBuilder calleeBuilder = new StringBuilder();
       RenderVisitor rv = this.createHelperInstance(calleeBuilder, callData);
       try {
-        rv.renderTemplate(callee, node.getParamsToRuntimeCheck(callee));
+        rv.renderTemplate(callee, node.getParamsToRuntimeCheck(callee.getTemplateName()));
       } catch (RenderException re) {
         // The {call .XXX} failed to render - a new partial stack trace element is added to capture
         // this template call.
@@ -635,10 +573,95 @@ public class RenderVisitor extends AbstractSoyNodeVisitor<Void> {
               ? UnsafeSanitizedContentOrdainer.ordainAsSafe(calleeBuilder.toString(), calleeKind)
               : StringData.forValue(calleeBuilder.toString());
       for (SoyPrintDirective directive : node.getEscapingDirectives()) {
-        resultData = applyDirective(directive, resultData, ImmutableList.<SoyValue>of(), node);
+        resultData = applyDirective(directive, resultData, ImmutableList.of(), node);
       }
       append(currOutputBuf, resultData, node);
     }
+  }
+
+  private SoyRecord createCallParams(CallNode node) {
+    if (node.numChildren() == 0) {
+      if (!node.isPassingData()) {
+        // Case 1: Not passing data and not passing params.
+        return ParamStore.EMPTY_INSTANCE;
+      }
+
+      // Case 2: Passing data and not passing params.
+      if (!node.isPassingAllData()) {
+        return getDataRecord(node);
+      }
+
+      ImmutableList<TemplateParam> params = node.getNearestAncestor(TemplateNode.class).getParams();
+      ParamStore dataWithDefaults = null;
+      // If this is a data="all" call and the caller has default parameters we need to augment the
+      // data record to make sure any default parameters are set to the default in the data record.
+      for (TemplateParam param : params) {
+        if (param.hasDefault() && data.getField(param.name()) == null) {
+          if (dataWithDefaults == null) {
+            dataWithDefaults = new AugmentedParamStore(data, params.size());
+          }
+          // This could be made more performant by precalculating the default value, but Tofu is
+          // legacy so don't worry about.
+          dataWithDefaults.setField(param.name(), lazyEval(param.defaultValue(), node));
+        }
+      }
+      return dataWithDefaults == null ? data : dataWithDefaults;
+    }
+
+    ParamStore params;
+    if (node.isPassingData()) {
+      // Case 3: Passing data and passing params.
+      SoyRecord dataRecord;
+      if (node.isPassingAllData()) {
+        dataRecord = data;
+      } else {
+        dataRecord = getDataRecord(node);
+      }
+      params = new AugmentedParamStore(dataRecord, node.numChildren());
+      if (node.isPassingAllData()) {
+        for (TemplateParam param : node.getNearestAncestor(TemplateNode.class).getParams()) {
+          // If this is a data="all" call and the caller has default parameters we need to augment
+          // the params record to make sure any unset default parameters are set to the default in
+          // the params record.
+          if (param.hasDefault() && params.getField(param.name()) == null) {
+            params.setField(param.name(), lazyEval(param.defaultValue(), node));
+          }
+        }
+      }
+    } else {
+      // Case 4: Not passing data and passing params.
+      params = new BasicParamStore(node.numChildren());
+    }
+
+    // --- Cases 3 and 4: Passing params. ---
+    for (CallParamNode child : node.getChildren()) {
+
+      if (child instanceof CallParamValueNode) {
+        params.setField(
+            child.getKey().identifier(), lazyEval(((CallParamValueNode) child).getExpr(), child));
+
+      } else if (child instanceof CallParamContentNode) {
+        params.setField(
+            child.getKey().identifier(), renderRenderUnitNode((CallParamContentNode) child));
+
+      } else {
+        throw new AssertionError();
+      }
+    }
+
+    return params;
+  }
+
+  private SoyRecord getDataRecord(CallNode node) {
+    SoyValue dataRefValue = eval(node.getDataExpr(), node);
+    if (!(dataRefValue instanceof SoyRecord)) {
+      throw RenderException.create(
+              "In 'call' command "
+                  + node.toSourceString()
+                  + ", the data reference does not resolve to a SoyRecord.")
+          .addStackTraceElement(node);
+    }
+    return (SoyRecord) dataRefValue;
   }
 
   @Override
@@ -753,7 +776,6 @@ public class RenderVisitor extends AbstractSoyNodeVisitor<Void> {
       evalVisitor =
           evalVisitorFactory.create(
               env,
-              ijData,
               cssRenamingMap,
               xidRenamingMap,
               msgBundle,
@@ -868,9 +890,11 @@ public class RenderVisitor extends AbstractSoyNodeVisitor<Void> {
     }
   }
 
-  private void checkStrictParamTypes(TemplateNode node, ImmutableList<TemplateParam> params) {
-    for (TemplateParam param : params) {
-      checkStrictParamType(node, param, env.getVarProvider(param));
+  private void checkStrictParamTypes(TemplateNode node, Predicate<String> paramsToTypeCheck) {
+    for (TemplateParam param : node.getParams()) {
+      if (paramsToTypeCheck.test(param.name())) {
+        checkStrictParamType(node, param, env.getVarProvider(param));
+      }
     }
     for (TemplateParam param : node.getInjectedParams()) {
       checkStrictParamType(node, param, env.getVarProvider(param));
@@ -901,6 +925,9 @@ public class RenderVisitor extends AbstractSoyNodeVisitor<Void> {
             });
         return;
       }
+    } else if (param.hasDefault() && paramValue.resolve() instanceof UndefinedData) {
+      // Default parameters are undefined if they're unset.
+      return;
     }
     checkValueType(param, paramValue.resolve(), node);
   }

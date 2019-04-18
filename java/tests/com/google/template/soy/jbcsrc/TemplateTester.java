@@ -24,12 +24,9 @@ import static com.google.template.soy.data.SoyValueConverter.EMPTY_DICT;
 
 import com.google.common.base.Joiner;
 import com.google.common.base.Optional;
-import com.google.common.base.Predicate;
-import com.google.common.base.Predicates;
 import com.google.common.base.Supplier;
 import com.google.common.base.Suppliers;
 import com.google.common.collect.ImmutableMap;
-import com.google.common.collect.Iterables;
 import com.google.common.collect.Lists;
 import com.google.common.truth.FailureMetadata;
 import com.google.common.truth.IterableSubject;
@@ -39,7 +36,6 @@ import com.google.common.truth.Truth;
 import com.google.template.soy.SoyFileSetParser;
 import com.google.template.soy.SoyFileSetParser.ParseResult;
 import com.google.template.soy.SoyFileSetParserBuilder;
-import com.google.template.soy.basetree.CopyState;
 import com.google.template.soy.data.LoggingAdvisingAppendable;
 import com.google.template.soy.data.LoggingAdvisingAppendable.BufferingAppendable;
 import com.google.template.soy.data.SoyRecord;
@@ -66,6 +62,7 @@ import com.google.template.soy.shared.restricted.SoyJavaFunction;
 import com.google.template.soy.shared.restricted.SoyJavaPrintDirective;
 import com.google.template.soy.soytree.SoyFileSetNode;
 import com.google.template.soy.soytree.SoyTreeUtils;
+import com.google.template.soy.soytree.TemplateNode;
 import com.google.template.soy.soytree.TemplateRegistry;
 import com.google.template.soy.types.SoyTypeRegistry;
 import java.io.ByteArrayOutputStream;
@@ -76,6 +73,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Predicate;
 import javax.annotation.CheckReturnValue;
 
 /** Utilities for testing compiled soy templates. */
@@ -84,17 +82,14 @@ public final class TemplateTester {
   private static RenderContext.Builder createDefaultBuilder() {
     return new RenderContext.Builder()
         .withSoyPrintDirectives(
-            InternalPlugins.internalDirectiveMap(new SoySimpleScope())
-                .entrySet()
-                .stream()
+            InternalPlugins.internalDirectiveMap(new SoySimpleScope()).entrySet().stream()
                 .filter(e -> e.getValue() instanceof SoyJavaPrintDirective)
                 .collect(
                     toImmutableMap(Map.Entry::getKey, e -> (SoyJavaPrintDirective) e.getValue())));
   }
 
   static RenderContext getDefaultContext(CompiledTemplates templates) {
-    return getDefaultContext(
-        templates, Predicates.<String>alwaysFalse(), /* debugSoyTemplateInfo= */ false);
+    return getDefaultContext(templates, arg -> false, /* debugSoyTemplateInfo= */ false);
   }
 
   static RenderContext getDefaultContext(
@@ -114,12 +109,8 @@ public final class TemplateTester {
   }
 
   static RenderContext getDefaultContextWithDebugInfo(CompiledTemplates templates) {
-    return getDefaultContext(
-        templates, Predicates.<String>alwaysFalse(), /* debugSoyTemplateInfo= */ true);
+    return getDefaultContext(templates, arg -> false, /* debugSoyTemplateInfo= */ true);
   }
-
-  private static final Subject.Factory<CompiledTemplateSubject, String> FACTORY =
-      CompiledTemplateSubject::new;
 
   /**
    * Returns a truth subject that can be used to assert on an template given the template body.
@@ -131,8 +122,18 @@ public final class TemplateTester {
     return assertThatFile(template);
   }
 
+  /**
+   * Returns a truth subject that can be used to assert on an element given the element body.
+   *
+   * <p>The given body lines are wrapped in a template called {@code ns.foo} that has no params.
+   */
+  public static CompiledTemplateSubject assertThatElementBody(String... body) {
+    String template = toElement(body);
+    return assertThatFile(template);
+  }
+
   static CompiledTemplateSubject assertThatFile(String... template) {
-    return Truth.assertAbout(FACTORY).that(Joiner.on('\n').join(template));
+    return Truth.assertAbout(CompiledTemplateSubject::new).that(Joiner.on('\n').join(template));
   }
 
   /**
@@ -219,7 +220,7 @@ public final class TemplateTester {
     }
 
     CompiledTemplateSubject failsToRenderWith(Class<? extends Throwable> expected) {
-      return failsToRenderWith(expected, ImmutableMap.<String, Object>of());
+      return failsToRenderWith(expected, ImmutableMap.of());
     }
 
     CompiledTemplateSubject failsToRenderWith(
@@ -281,6 +282,7 @@ public final class TemplateTester {
       Optional<CompiledTemplates> template =
           BytecodeCompiler.compile(
               parseResult.registry(),
+              parseResult.fileSet(),
               /* developmentMode= */ false,
               errors,
               parser.soyFileSuppliers(),
@@ -348,17 +350,13 @@ public final class TemplateTester {
           builder.addSoyFunction(function);
         }
         builder.addSoySourceFunctions(soySourceFunctions);
-        SoyFileSetNode fileSet =
+        ParseResult parseResult =
             builder
                 .typeRegistry(typeRegistry)
                 .options(generalOptions)
                 .errorReporter(ErrorReporter.exploding())
-                .parse()
-                .fileSet();
-        // Clone the tree, there tend to be bugs in the AST clone implementations that don't show
-        // up until development time when we do a lot of AST cloning, so clone here to try to flush
-        // them out.
-        fileSet = fileSet.copy(new CopyState());
+                .parse();
+        SoyFileSetNode fileSet = parseResult.fileSet();
 
         Map<String, Supplier<Object>> pluginInstances = new LinkedHashMap<>();
         for (FunctionNode fnNode : SoyTreeUtils.getAllNodesOfType(fileSet, FunctionNode.class)) {
@@ -372,13 +370,16 @@ public final class TemplateTester {
 
         // N.B. we are reproducing some of BytecodeCompiler here to make it easier to look at
         // intermediate data structures.
-        TemplateRegistry registry = new TemplateRegistry(fileSet, ErrorReporter.exploding());
+        TemplateRegistry registry = parseResult.registry();
         CompiledTemplateRegistry compilerRegistry = new CompiledTemplateRegistry(registry);
-        String templateName = Iterables.getOnlyElement(registry.getBasicTemplatesMap().keySet());
+
+        TemplateNode template = fileSet.getChild(0).getChild(0);
+        String templateName = template.getTemplateName();
         classData =
             new TemplateCompiler(
                     compilerRegistry,
                     compilerRegistry.getTemplateInfoByTemplateName(templateName),
+                    template,
                     ErrorReporter.exploding(),
                     typeRegistry)
                 .compile();
@@ -467,12 +468,22 @@ public final class TemplateTester {
     return builder.toString();
   }
 
+  private static String toElement(String... body) {
+    StringBuilder builder = new StringBuilder();
+    builder.append("{namespace ns}\n").append("{element .foo}\n");
+    Joiner.on("\n").appendTo(builder, body);
+    builder.append("\n{/element}\n");
+    return builder.toString();
+  }
+
   static CompiledTemplates compileFile(String... fileBody) {
     String file = Joiner.on('\n').join(fileBody);
     SoyFileSetParser parser = SoyFileSetParserBuilder.forFileContents(file).build();
+    ParseResult parseResult = parser.parse();
     return BytecodeCompiler.compile(
-            parser.parse().registry(),
-            false,
+            parseResult.registry(),
+            parseResult.fileSet(),
+            /*developmentMode=*/ false,
             ErrorReporter.exploding(),
             parser.soyFileSuppliers(),
             parser.typeRegistry())

@@ -40,6 +40,8 @@ import com.google.template.soy.data.SoyProtoValue;
 import com.google.template.soy.data.SoyRecord;
 import com.google.template.soy.data.SoyValue;
 import com.google.template.soy.data.SoyValueProvider;
+import com.google.template.soy.data.SoyVisualElement;
+import com.google.template.soy.data.SoyVisualElementData;
 import com.google.template.soy.data.restricted.IntegerData;
 import com.google.template.soy.data.restricted.SoyString;
 import com.google.template.soy.jbcsrc.api.RenderResult;
@@ -104,6 +106,8 @@ public final class BytecodeUtils {
   public static final Type STRING_TYPE = Type.getType(String.class);
   public static final Type THROWABLE_TYPE = Type.getType(Throwable.class);
   public static final Type ILLEGAL_STATE_EXCEPTION_TYPE = Type.getType(IllegalStateException.class);
+  public static final Type SOY_VISUAL_ELEMENT_TYPE = Type.getType(SoyVisualElement.class);
+  public static final Type SOY_VISUAL_ELEMENT_DATA_TYPE = Type.getType(SoyVisualElementData.class);
 
   public static final Method CLASS_INIT = Method.getMethod("void <clinit>()");
   public static final Method NULLARY_INIT = Method.getMethod("void <init>()");
@@ -120,28 +124,27 @@ public final class BytecodeUtils {
                           objectTypeToClassCache.getUnchecked(key.getElementType());
                       if (elementType.isPresent()) {
                         // The easiest way to generically get an array class.
-                        return Optional.<Class<?>>of(
-                            Array.newInstance(elementType.get(), 0).getClass());
+                        return Optional.of(Array.newInstance(elementType.get(), 0).getClass());
                       }
                       return Optional.absent();
                     case Type.VOID:
-                      return Optional.<Class<?>>of(void.class);
+                      return Optional.of(void.class);
                     case Type.BOOLEAN:
-                      return Optional.<Class<?>>of(boolean.class);
+                      return Optional.of(boolean.class);
                     case Type.BYTE:
-                      return Optional.<Class<?>>of(byte.class);
+                      return Optional.of(byte.class);
                     case Type.CHAR:
-                      return Optional.<Class<?>>of(char.class);
+                      return Optional.of(char.class);
                     case Type.DOUBLE:
-                      return Optional.<Class<?>>of(double.class);
+                      return Optional.of(double.class);
                     case Type.INT:
-                      return Optional.<Class<?>>of(int.class);
+                      return Optional.of(int.class);
                     case Type.SHORT:
-                      return Optional.<Class<?>>of(short.class);
+                      return Optional.of(short.class);
                     case Type.LONG:
-                      return Optional.<Class<?>>of(long.class);
+                      return Optional.of(long.class);
                     case Type.FLOAT:
-                      return Optional.<Class<?>>of(float.class);
+                      return Optional.of(float.class);
                     case Type.OBJECT:
                       try {
                         String className = key.getClassName();
@@ -151,7 +154,7 @@ public final class BytecodeUtils {
                           // classpath already!
                           return Optional.absent();
                         }
-                        return Optional.<Class<?>>of(
+                        return Optional.of(
                             Class.forName(className, false, BytecodeUtils.class.getClassLoader()));
                       } catch (ClassNotFoundException e) {
                         return Optional.absent();
@@ -577,17 +580,17 @@ public final class BytecodeUtils {
     SoyRuntimeType leftRuntimeType = left.soyRuntimeType();
     SoyRuntimeType rightRuntimeType = right.soyRuntimeType();
     if (leftRuntimeType.isKnownString()) {
-      return doEqualsString(left.unboxAs(String.class), right);
+      return doEqualsString(left.unboxAsString(), right);
     }
     if (rightRuntimeType.isKnownString()) {
       // TODO(lukes): we are changing the order of evaluation here.
-      return doEqualsString(right.unboxAs(String.class), left);
+      return doEqualsString(right.unboxAsString(), left);
     }
     if (leftRuntimeType.isKnownInt()
         && rightRuntimeType.isKnownInt()
         && left.isNonNullable()
         && right.isNonNullable()) {
-      return compare(Opcodes.IFEQ, left.unboxAs(long.class), right.unboxAs(long.class));
+      return compare(Opcodes.IFEQ, left.unboxAsLong(), right.unboxAsLong());
     }
     if (leftRuntimeType.isKnownNumber()
         && rightRuntimeType.isKnownNumber()
@@ -611,9 +614,9 @@ public final class BytecodeUtils {
     SoyRuntimeType otherRuntimeType = other.soyRuntimeType();
     if (otherRuntimeType.isKnownStringOrSanitizedContent()) {
       if (stringExpr.isNonNullable()) {
-        return stringExpr.invoke(MethodRef.EQUALS, other.unboxAs(String.class));
+        return stringExpr.invoke(MethodRef.EQUALS, other.unboxAsString());
       } else {
-        return MethodRef.OBJECTS_EQUALS.invoke(stringExpr, other.unboxAs(String.class));
+        return MethodRef.OBJECTS_EQUALS.invoke(stringExpr, other.unboxAsString());
       }
     }
     if (otherRuntimeType.isKnownNumber() && other.isNonNullable()) {

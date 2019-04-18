@@ -16,19 +16,21 @@
 
 package com.google.template.soy.bidifunctions;
 
-import com.google.common.collect.ImmutableSet;
 import com.google.template.soy.data.SoyValue;
-import com.google.template.soy.jssrc.restricted.JsExpr;
-import com.google.template.soy.jssrc.restricted.SoyLibraryAssistedJsSrcFunction;
 import com.google.template.soy.plugin.java.restricted.JavaPluginContext;
 import com.google.template.soy.plugin.java.restricted.JavaValue;
 import com.google.template.soy.plugin.java.restricted.JavaValueFactory;
 import com.google.template.soy.plugin.java.restricted.SoyJavaSourceFunction;
-import com.google.template.soy.pysrc.restricted.PyExpr;
-import com.google.template.soy.pysrc.restricted.SoyPySrcFunction;
+import com.google.template.soy.plugin.javascript.restricted.JavaScriptPluginContext;
+import com.google.template.soy.plugin.javascript.restricted.JavaScriptValue;
+import com.google.template.soy.plugin.javascript.restricted.JavaScriptValueFactory;
+import com.google.template.soy.plugin.javascript.restricted.SoyJavaScriptSourceFunction;
+import com.google.template.soy.plugin.python.restricted.PythonPluginContext;
+import com.google.template.soy.plugin.python.restricted.PythonValue;
+import com.google.template.soy.plugin.python.restricted.PythonValueFactory;
+import com.google.template.soy.plugin.python.restricted.SoyPythonSourceFunction;
 import com.google.template.soy.shared.restricted.Signature;
 import com.google.template.soy.shared.restricted.SoyFunctionSignature;
-import com.google.template.soy.shared.restricted.TypedSoyFunction;
 import java.lang.reflect.Method;
 import java.util.List;
 
@@ -47,14 +49,12 @@ import java.util.List;
           returnType = "int",
           parameterTypes = {"?", "?"})
     })
-final class BidiTextDirFunction extends TypedSoyFunction
-    implements SoyJavaSourceFunction, SoyLibraryAssistedJsSrcFunction, SoyPySrcFunction {
+final class BidiTextDirFunction
+    implements SoyJavaSourceFunction, SoyJavaScriptSourceFunction, SoyPythonSourceFunction {
 
   // lazy singleton pattern, allows other backends to avoid the work.
   private static final class Methods {
-    static final Method BIDI_TEXT_DIR_NO_HTML =
-        JavaValueFactory.createMethod(BidiFunctionsRuntime.class, "bidiTextDir", SoyValue.class);
-    static final Method BIDI_TEXT_DIR_MAYBE_HTML =
+    static final Method BIDI_TEXT_DIR =
         JavaValueFactory.createMethod(
             BidiFunctionsRuntime.class, "bidiTextDir", SoyValue.class, boolean.class);
   }
@@ -62,39 +62,22 @@ final class BidiTextDirFunction extends TypedSoyFunction
   @Override
   public JavaValue applyForJavaSource(
       JavaValueFactory factory, List<JavaValue> args, JavaPluginContext context) {
-    if (args.size() == 1) {
-      return factory.callStaticMethod(Methods.BIDI_TEXT_DIR_NO_HTML, args.get(0));
-    }
-    return factory.callStaticMethod(
-        Methods.BIDI_TEXT_DIR_MAYBE_HTML, args.get(0), args.get(1).asSoyBoolean());
+    JavaValue html = args.size() == 2 ? args.get(1).asSoyBoolean() : factory.constant(false);
+    return factory.callStaticMethod(Methods.BIDI_TEXT_DIR, args.get(0), html);
   }
 
   @Override
-  public JsExpr computeForJsSrc(List<JsExpr> args) {
-    JsExpr value = args.get(0);
-    JsExpr isHtml = (args.size() == 2) ? args.get(1) : null;
-
-    String callText =
-        (isHtml != null)
-            ? "soy.$$bidiTextDir(" + value.getText() + ", " + isHtml.getText() + ")"
-            : "soy.$$bidiTextDir(" + value.getText() + ")";
-    return new JsExpr(callText, Integer.MAX_VALUE);
+  public JavaScriptValue applyForJavaScriptSource(
+      JavaScriptValueFactory factory, List<JavaScriptValue> args, JavaScriptPluginContext context) {
+    return factory.callNamespaceFunction(
+        "soy", "soy.$$bidiTextDir", args.toArray(new JavaScriptValue[0]));
   }
 
   @Override
-  public ImmutableSet<String> getRequiredJsLibNames() {
-    return ImmutableSet.<String>of("soy");
-  }
-
-  @Override
-  public PyExpr computeForPySrc(List<PyExpr> args) {
-    PyExpr value = args.get(0);
-    PyExpr isHtml = (args.size() == 2) ? args.get(1) : null;
-
-    String callText =
-        (isHtml != null)
-            ? "bidi.text_dir(" + value.getText() + ", " + isHtml.getText() + ")"
-            : "bidi.text_dir(" + value.getText() + ")";
-    return new PyExpr(callText, Integer.MAX_VALUE);
+  public PythonValue applyForPythonSource(
+      PythonValueFactory factory, List<PythonValue> args, PythonPluginContext context) {
+    return factory
+        .global("bidi.text_dir")
+        .call(args.get(0), args.size() == 2 ? args.get(1) : factory.constant(false));
   }
 }

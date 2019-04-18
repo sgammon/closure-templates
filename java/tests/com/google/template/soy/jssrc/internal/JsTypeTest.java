@@ -18,12 +18,15 @@ package com.google.template.soy.jssrc.internal;
 
 import static com.google.common.truth.Truth.assertThat;
 import static com.google.template.soy.jssrc.dsl.Expression.id;
-import static com.google.template.soy.jssrc.internal.JsType.forSoyType;
+import static com.google.template.soy.jssrc.internal.JsType.forIncrementalDomState;
+import static com.google.template.soy.jssrc.internal.JsType.forJsSrc;
 import static com.google.template.soy.types.SoyTypes.makeNullable;
 
 import com.google.common.collect.ImmutableMap;
+import com.google.common.collect.ImmutableSet;
 import com.google.common.truth.StringSubject;
 import com.google.template.soy.jssrc.dsl.CodeChunk;
+import com.google.template.soy.testing.Proto3Message;
 import com.google.template.soy.types.AnyType;
 import com.google.template.soy.types.BoolType;
 import com.google.template.soy.types.IntType;
@@ -32,7 +35,10 @@ import com.google.template.soy.types.MapType;
 import com.google.template.soy.types.RecordType;
 import com.google.template.soy.types.SanitizedType.HtmlType;
 import com.google.template.soy.types.SanitizedType.UriType;
+import com.google.template.soy.types.SoyProtoEnumType;
+import com.google.template.soy.types.SoyProtoType;
 import com.google.template.soy.types.SoyType;
+import com.google.template.soy.types.SoyTypeRegistry;
 import com.google.template.soy.types.SoyTypes;
 import com.google.template.soy.types.StringType;
 import com.google.template.soy.types.UnionType;
@@ -77,22 +83,22 @@ public final class JsTypeTest {
     assertThatTypeExpr(HtmlType.getInstance())
         .isEqualTo(
             "!goog.html.SafeHtml|!goog.soy.data.SanitizedHtml|!goog.soy.data.UnsanitizedText"
-                + "|string");
+                + "|!soydata.$$EMPTY_STRING_|string");
     assertThatTypeExpr(makeNullable(HtmlType.getInstance()))
         .isEqualTo(
-            "!goog.html.SafeHtml|!goog.soy.data.SanitizedHtml|!goog.soy.data.UnsanitizedText|null"
+            "!goog.html.SafeHtml|!goog.soy.data.SanitizedHtml|!goog.soy.data.UnsanitizedText|!soydata.$$EMPTY_STRING_|null"
                 + "|string|undefined");
     assertThatTypeExpr(UnionType.of(HtmlType.getInstance(), UriType.getInstance()))
         .isEqualTo(
             "!goog.Uri|!goog.html.SafeHtml|!goog.html.SafeUrl|!goog.html.TrustedResourceUrl"
                 + "|!goog.soy.data.SanitizedHtml|!goog.soy.data.SanitizedUri"
-                + "|!goog.soy.data.UnsanitizedText|string");
+                + "|!goog.soy.data.UnsanitizedText|!soydata.$$EMPTY_STRING_|string");
 
     // Arrays
     assertThatTypeExpr(LIST_OF_HTML)
         .isEqualTo(
             "!Array<!goog.html.SafeHtml|!goog.soy.data.SanitizedHtml"
-                + "|!goog.soy.data.UnsanitizedText|string>");
+                + "|!goog.soy.data.UnsanitizedText|!soydata.$$EMPTY_STRING_|string>");
 
     // Nullable types
     assertThatTypeExpr(NULLABLE_STRING)
@@ -101,40 +107,56 @@ public final class JsTypeTest {
     assertThatTypeExpr(NULLABLE_LIST_OF_HTML)
         .isEqualTo(
             "!Array<!goog.html.SafeHtml|!goog.soy.data.SanitizedHtml"
-                + "|!goog.soy.data.UnsanitizedText|string>|null|undefined");
+                + "|!goog.soy.data.UnsanitizedText|!soydata.$$EMPTY_STRING_|string>|null|undefined");
 
     // Records
     assertThatTypeExpr(
-            RecordType.of(
-                ImmutableMap.<String, SoyType>of(
-                    "foo", IntType.getInstance(), "bar", LIST_OF_HTML)))
+            RecordType.of(ImmutableMap.of("foo", IntType.getInstance(), "bar", LIST_OF_HTML)))
         .isEqualTo(
             "{bar: !Array<!goog.html.SafeHtml|!goog.soy.data.SanitizedHtml"
-                + "|!goog.soy.data.UnsanitizedText|string>, foo: number,}");
+                + "|!goog.soy.data.UnsanitizedText|!soydata.$$EMPTY_STRING_|string>, "
+                + "foo: number,}");
     assertThatTypeExpr(
-            RecordType.of(
-                ImmutableMap.<String, SoyType>of(
-                    "foo", IntType.getInstance(), "bar", LIST_OF_HTML)))
+            RecordType.of(ImmutableMap.of("foo", IntType.getInstance(), "bar", LIST_OF_HTML)))
         .isEqualTo(
             "{bar: !Array<!goog.html.SafeHtml|!goog.soy.data.SanitizedHtml"
-                + "|!goog.soy.data.UnsanitizedText|string>, foo: number,}");
+                + "|!goog.soy.data.UnsanitizedText|!soydata.$$EMPTY_STRING_|string>, "
+                + "foo: number,}");
     assertThatTypeExpr(
             RecordType.of(
-                ImmutableMap.<String, SoyType>of(
-                    "foo", IntType.getInstance(), "bar", NULLABLE_LIST_OF_HTML)))
+                ImmutableMap.of("foo", IntType.getInstance(), "bar", NULLABLE_LIST_OF_HTML)))
         .isEqualTo(
             "{bar: (!Array<!goog.html.SafeHtml|!goog.soy.data.SanitizedHtml"
-                + "|!goog.soy.data.UnsanitizedText|string>|null|undefined), foo: number,}");
-    assertThatTypeExpr(RecordType.of(ImmutableMap.<String, SoyType>of())).isEqualTo("!Object");
+                + "|!goog.soy.data.UnsanitizedText|!soydata.$$EMPTY_STRING_|string>|null|"
+                + "undefined), foo: number,}");
+    assertThatTypeExpr(RecordType.of(ImmutableMap.of())).isEqualTo("!Object");
 
     assertThatTypeExpr(MapType.of(StringType.getInstance(), HtmlType.getInstance()))
         .isEqualTo(
-            "!soy.map.Map<string,!goog.html.SafeHtml|"
-                + "!goog.soy.data.SanitizedHtml|!goog.soy.data.UnsanitizedText|string>");
+            "!soy.map.Map<"
+                + "string,!goog.html.SafeHtml|!goog.soy.data.SanitizedHtml|"
+                + "!goog.soy.data.UnsanitizedText|!soydata.$$EMPTY_STRING_|string>");
   }
 
   @Test
-  public void testTypeTests() {
+  public void testForSoyTypeStrict() {
+    assertThatTypeExprStrict(new SoyProtoEnumType(Proto3Message.AnEnum.getDescriptor()))
+        .isEqualTo("proto.soy.test.Proto3Message.AnEnum");
+
+    assertThatTypeExprStrict(
+            new SoyProtoType(
+                new SoyTypeRegistry(), Proto3Message.getDescriptor(), ImmutableSet.of()))
+        .isEqualTo("!proto.soy.test.Proto3Message");
+
+    assertThatTypeExprStrict(HtmlType.getInstance())
+        .isEqualTo(
+            "!goog.soy.data.SanitizedHtml"
+                + "|!google3.javascript.template.soy.element_lib_idom.IdomFunction"
+                + "|function(!incrementaldomlib.IncrementalDomRenderer): undefined");
+  }
+
+  @Test
+  public void testGetTypeAssertion() {
     assertThat(getTypeAssertion(StringType.getInstance(), "x"))
         .isEqualTo("goog.isString(x) || x instanceof goog.soy.data.UnsanitizedText");
     assertThat(getTypeAssertion(IntType.getInstance(), "x")).isEqualTo("goog.isNumber(x)");
@@ -158,8 +180,20 @@ public final class JsTypeTest {
             "goog.isArray(x) || (goog.isString(x) || x instanceof goog.soy.data.UnsanitizedText)");
   }
 
+  @Test
+  public void testGetSoyTypeAssertionStrict() {
+    assertThat(getSoyTypeAssertionStrict(BoolType.getInstance(), "x"))
+        .isEqualTo("soy.asserts.assertType(goog.isBoolean(x), 'x', x, 'boolean')");
+    assertThat(
+            getSoyTypeAssertionStrict(
+                UnionType.of(BoolType.getInstance(), IntType.getInstance()), "x"))
+        .isEqualTo(
+            "soy.asserts.assertType("
+                + "goog.isBoolean(x) || goog.isNumber(x), 'x', x, 'boolean|number')");
+  }
+
   private static String getTypeAssertion(SoyType instance, String varName) {
-    return forSoyType(instance, false)
+    return forJsSrc(instance)
         .getTypeAssertion(
             id(varName), CodeChunk.Generator.create(JsSrcNameGenerators.forLocalVariables()))
         .get()
@@ -167,15 +201,30 @@ public final class JsTypeTest {
         .getText();
   }
 
+  private String getSoyTypeAssertionStrict(SoyType instance, String varName) {
+    return forIncrementalDomState(instance)
+        .getSoyTypeAssertion(
+            id(varName),
+            varName,
+            CodeChunk.Generator.create(JsSrcNameGenerators.forLocalVariables()))
+        .get()
+        .assertExprAndCollectRequires(CodeChunk.RequiresCollector.NULL)
+        .getText();
+  }
+
   private StringSubject assertThatTypeExpr(SoyType soyType) {
-    return assertThat(forSoyType(soyType, false).typeExpr());
+    return assertThat(forJsSrc(soyType).typeExpr());
+  }
+
+  private StringSubject assertThatTypeExprStrict(SoyType soyType) {
+    return assertThat(forIncrementalDomState(soyType).typeExpr());
   }
 
   private StringSubject assertThatTypeExprForRecordMember(SoyType soyType) {
-    return assertThat(forSoyType(soyType, false).typeExprForRecordMember(/* isOptional= */ false));
+    return assertThat(forJsSrc(soyType).typeExprForRecordMember(/* isOptional= */ false));
   }
 
   private StringSubject assertThatTypeExprForOptionalRecordMember(SoyType soyType) {
-    return assertThat(forSoyType(soyType, false).typeExprForRecordMember(/* isOptional= */ true));
+    return assertThat(forJsSrc(soyType).typeExprForRecordMember(/* isOptional= */ true));
   }
 }

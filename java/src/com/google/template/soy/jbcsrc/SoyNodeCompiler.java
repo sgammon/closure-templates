@@ -35,7 +35,6 @@ import com.google.auto.value.AutoValue;
 import com.google.common.base.Optional;
 import com.google.common.collect.ImmutableList;
 import com.google.common.primitives.Ints;
-import com.google.protobuf.Message;
 import com.google.template.soy.base.internal.FixedIdGenerator;
 import com.google.template.soy.data.SanitizedContent.ContentKind;
 import com.google.template.soy.data.SoyRecord;
@@ -70,6 +69,7 @@ import com.google.template.soy.msgs.internal.MsgUtils;
 import com.google.template.soy.msgs.internal.MsgUtils.MsgPartsAndIds;
 import com.google.template.soy.shared.RangeArgs;
 import com.google.template.soy.shared.internal.BuiltinFunction;
+import com.google.template.soy.shared.restricted.SoyFunctionSignature;
 import com.google.template.soy.shared.restricted.SoyPrintDirective;
 import com.google.template.soy.soytree.AbstractReturningSoyNodeVisitor;
 import com.google.template.soy.soytree.CallBasicNode;
@@ -84,6 +84,7 @@ import com.google.template.soy.soytree.ForNonemptyNode;
 import com.google.template.soy.soytree.IfCondNode;
 import com.google.template.soy.soytree.IfElseNode;
 import com.google.template.soy.soytree.IfNode;
+import com.google.template.soy.soytree.KeyNode;
 import com.google.template.soy.soytree.LetContentNode;
 import com.google.template.soy.soytree.LetValueNode;
 import com.google.template.soy.soytree.LogNode;
@@ -103,6 +104,7 @@ import com.google.template.soy.soytree.SwitchDefaultNode;
 import com.google.template.soy.soytree.SwitchNode;
 import com.google.template.soy.soytree.TemplateNode;
 import com.google.template.soy.soytree.VeLogNode;
+import com.google.template.soy.soytree.defn.TemplateParam;
 import com.google.template.soy.types.SoyTypeRegistry;
 import java.util.ArrayList;
 import java.util.List;
@@ -145,7 +147,7 @@ final class SoyNodeCompiler extends AbstractReturningSoyNodeVisitor<Statement> {
     ExpressionCompiler expressionCompiler =
         ExpressionCompiler.create(detachState, parameterLookup, variables, reporter, typeRegistry);
     ExpressionToSoyValueProviderCompiler soyValueProviderCompiler =
-        ExpressionToSoyValueProviderCompiler.create(expressionCompiler, parameterLookup);
+        ExpressionToSoyValueProviderCompiler.create(variables, expressionCompiler, parameterLookup);
     return new SoyNodeCompiler(
         thisVar,
         registry,
@@ -372,7 +374,7 @@ final class SoyNodeCompiler extends AbstractReturningSoyNodeVisitor<Statement> {
               },
               DERIVED);
     } else {
-      SoyExpression expr = exprCompiler.compile(node.getExpr()).unboxAs(List.class);
+      SoyExpression expr = exprCompiler.compile(node.getExpr()).unboxAsList();
       Variable listVar =
           scope.createSynthetic(SyntheticVarName.foreachLoopList(nonEmptyNode), expr, STORE);
       initializers.add(listVar.initializer());
@@ -510,7 +512,7 @@ final class SoyNodeCompiler extends AbstractReturningSoyNodeVisitor<Statement> {
       // runtime with IllegalArgumentException.
       Expression startExpression =
           MethodRef.INTS_CHECKED_CAST.invoke(
-              exprCompiler.compile(expression.get(), startDetachPoint).unboxAs(long.class));
+              exprCompiler.compile(expression.get(), startDetachPoint).unboxAsLong());
       if (!startExpression.isCheap()) {
         // bounce it into a local variable
         Variable startVar = scope.createSynthetic(varName, startExpression, STORE);
@@ -568,9 +570,15 @@ final class SoyNodeCompiler extends AbstractReturningSoyNodeVisitor<Statement> {
           parameterLookup.getRenderContext().getEscapingDirectiveAsFunction(child.getName()));
     }
     Label reattachPoint = new Label();
+    SoyFunctionSignature functionSignature =
+        loggingFunction.getClass().getAnnotation(SoyFunctionSignature.class);
+    checkNotNull(
+        functionSignature,
+        "LoggingFunction %s must be annotated with @SoyFunctionSignature",
+        loggingFunction.getClass().getName());
     return appendableExpression
         .appendLoggingFunctionInvocation(
-            loggingFunction.getName(),
+            functionSignature.name(),
             loggingFunction.getPlaceholder(),
             exprCompiler.asBasicCompiler(reattachPoint).compileToList(fn.getChildren()),
             printDirectives)
@@ -583,7 +591,7 @@ final class SoyNodeCompiler extends AbstractReturningSoyNodeVisitor<Statement> {
     SoyExpression value = basic.compile(node.getExpr());
     // We may have print directives, that means we need to pass the render value through a bunch of
     // SoyJavaPrintDirective.apply methods.  This means lots and lots of boxing.
-    // TODO(user): tracks adding streaming print directives which would help with this,
+    // TODO(b/18260376): tracks adding streaming print directives which would help with this,
     // because instead of wrapping the soy value, we would just wrap the appendable.
     for (PrintDirectiveNode printDirective : node.getChildren()) {
       value =
@@ -739,6 +747,12 @@ final class SoyNodeCompiler extends AbstractReturningSoyNodeVisitor<Statement> {
         constant(node.getSourceLocation().getBeginLine()));
   }
 
+  @Override
+  protected Statement visitKeyNode(KeyNode node) {
+    // Outside of incremental dom, key nodes are a no-op.
+    return Statement.NULL_STATEMENT;
+  }
+
   /**
    * MsgFallbackGroupNodes have either one or two children. In the 2 child case the second child is
    * the {@code {fallbackmsg}} entry. For this we generate code that looks like:
@@ -840,10 +854,7 @@ final class SoyNodeCompiler extends AbstractReturningSoyNodeVisitor<Statement> {
   @Override
   protected Statement visitVeLogNode(final VeLogNode node) {
     final Label restartPoint = new Label();
-    final Expression configExpression =
-        node.getConfigExpression() == null
-            ? BytecodeUtils.constantNull(BytecodeUtils.MESSAGE_TYPE)
-            : exprCompiler.compile(node.getConfigExpression(), restartPoint).unboxAs(Message.class);
+    final Expression veData = exprCompiler.compile(node.getVeDataExpression(), restartPoint);
     final Expression hasLogger = parameterLookup.getRenderContext().hasLogger();
     final Statement body = Statement.concat(visitChildren(node));
     final Statement exitStatement =
@@ -852,16 +863,14 @@ final class SoyNodeCompiler extends AbstractReturningSoyNodeVisitor<Statement> {
             .asStatement();
     if (node.getLogonlyExpression() != null) {
       final Expression logonlyExpression =
-          exprCompiler.compile(node.getLogonlyExpression(), restartPoint).unboxAs(boolean.class);
-      final Expression appendable = appendableExpression;
+          exprCompiler.compile(node.getLogonlyExpression(), restartPoint).unboxAsBoolean();
       return new Statement() {
         @Override
         protected void doGen(CodeBuilder cb) {
           // Key
           // LO: logonly
           // HL: hasLogger
-          // id: logging id
-          // data: config expression
+          // veData: SoyVisualElementData
           // LS: LogStatement
           // A: appendable
           //
@@ -875,15 +884,12 @@ final class SoyNodeCompiler extends AbstractReturningSoyNodeVisitor<Statement> {
           Label noLogger = new Label();
           hasLogger.gen(cb); // HL, LO
           cb.ifZCmp(EQ, noLogger); // LO
-          cb.pushLong(node.getLoggingId()); // id, LO
-          cb.dup2X1(); // id, LO, id
-          cb.pop2(); // LO, id
-          configExpression.gen(cb); // data, LO, id
-          cb.swap(); // LO, data, id
-          MethodRef.LOG_STATEMENT_CREATE.invokeUnchecked(cb); // LS
-          appendable.gen(cb); // A, LS
+          veData.gen(cb); // veData, LO
+          cb.swap(); // LO, veData
+          MethodRef.CREATE_LOG_STATEMENT.invokeUnchecked(cb); // LS
+          appendableExpression.gen(cb); // A, LS
           cb.swap(); // LS, A
-          AppendableExpression.ENTER_LOGGABLE_STATEMENT.invokeUnchecked(cb); // appendable
+          AppendableExpression.ENTER_LOGGABLE_STATEMENT.invokeUnchecked(cb); // A
           cb.pop();
           Label bodyLabel = new Label();
           cb.goTo(bodyLabel);
@@ -898,21 +904,17 @@ final class SoyNodeCompiler extends AbstractReturningSoyNodeVisitor<Statement> {
           exitStatement.gen(cb);
         }
       };
-
     } else {
       final Statement enterStatement =
           ControlFlow.IfBlock.create(
                   hasLogger,
                   appendableExpression
                       .enterLoggableElement(
-                          MethodRef.LOG_STATEMENT_CREATE.invoke(
-                              BytecodeUtils.constant(node.getLoggingId()),
-                              configExpression,
-                              BytecodeUtils.constant(false)))
+                          MethodRef.CREATE_LOG_STATEMENT.invoke(
+                              veData, BytecodeUtils.constant(false)))
                       .toStatement()
                       .labelStart(restartPoint))
               .asStatement();
-      ;
       return Statement.concat(enterStatement, body, exitStatement);
     }
   }
@@ -1009,59 +1011,90 @@ final class SoyNodeCompiler extends AbstractReturningSoyNodeVisitor<Statement> {
 
   private Expression prepareParamsHelper(CallNode node, Label reattachPoint) {
     if (node.numChildren() == 0) {
-      // Easy, just use the data attribute
-      return getDataExpression(node, reattachPoint);
-    } else {
-      // Otherwise we need to build a dictionary from {param} statements.
-      Expression paramStoreExpression = getParamStoreExpression(node, reattachPoint);
-      for (CallParamNode child : node.getChildren()) {
-        String paramKey = child.getKey().identifier();
-        Expression valueExpr;
-        if (child instanceof CallParamContentNode) {
-          valueExpr =
-              lazyClosureCompiler.compileLazyContent(
-                  "param", (CallParamContentNode) child, paramKey);
-        } else {
-          valueExpr =
-              lazyClosureCompiler.compileLazyExpression(
-                  "param", child, paramKey, ((CallParamValueNode) child).getExpr());
-        }
-        // ParamStore.setField return 'this' so we can just chain the invocations together.
-        paramStoreExpression =
-            MethodRef.PARAM_STORE_SET_FIELD.invoke(
-                paramStoreExpression, BytecodeUtils.constant(paramKey), valueExpr);
+      if (!node.isPassingData()) {
+        return FieldRef.EMPTY_DICT.accessor();
+      } else if (!node.isPassingAllData()) {
+        return getDataRecordExpression(node, reattachPoint);
       }
-      return paramStoreExpression;
-    }
-  }
 
-  /** Returns an expression that creates a new {@link ParamStore} suitable for holding all the */
-  private Expression getParamStoreExpression(CallNode node, Label reattachPoint) {
-    Expression paramStoreExpression;
-    if (node.isPassingData()) {
+      Expression paramsRecord = parameterLookup.getParamsRecord();
+      return maybeAddDefaultParams(
+              node,
+              ConstructorRef.AUGMENTED_PARAM_STORE.construct(
+                  paramsRecord, constant(node.numChildren())))
+          .or(paramsRecord);
+    }
+
+    Expression paramStoreExpression = getParamStoreExpression(node, reattachPoint);
+    for (CallParamNode child : node.getChildren()) {
+      String paramKey = child.getKey().identifier();
+      Expression valueExpr;
+      if (child instanceof CallParamContentNode) {
+        valueExpr =
+            lazyClosureCompiler.compileLazyContent("param", (CallParamContentNode) child, paramKey);
+      } else {
+        valueExpr =
+            lazyClosureCompiler.compileLazyExpression(
+                "param", child, paramKey, ((CallParamValueNode) child).getExpr());
+      }
+      // ParamStore.setField return 'this' so we can just chain the invocations together.
       paramStoreExpression =
-          ConstructorRef.AUGMENTED_PARAM_STORE.construct(
-              getDataExpression(node, reattachPoint), constant(node.numChildren()));
-    } else {
-      paramStoreExpression =
-          ConstructorRef.BASIC_PARAM_STORE.construct(constant(node.numChildren()));
+          MethodRef.PARAM_STORE_SET_FIELD.invoke(
+              paramStoreExpression, BytecodeUtils.constant(paramKey), valueExpr);
     }
     return paramStoreExpression;
   }
 
-  private Expression getDataExpression(CallNode node, Label reattachPoint) {
-    if (node.isPassingData()) {
-      if (node.isPassingAllData()) {
-        return parameterLookup.getParamsRecord();
-      } else {
-        return exprCompiler
-            .compile(node.getDataExpr(), reattachPoint)
-            .box()
-            .checkedCast(SoyRecord.class);
-      }
-    } else {
-      return FieldRef.EMPTY_DICT.accessor();
+  /**
+   * Returns an expression that creates a new {@link ParamStore} suitable for holding all the
+   * parameters.
+   */
+  private Expression getParamStoreExpression(CallNode node, Label reattachPoint) {
+    if (!node.isPassingData()) {
+      return ConstructorRef.BASIC_PARAM_STORE.construct(constant(node.numChildren()));
     }
+
+    Expression dataExpression;
+    if (node.isPassingAllData()) {
+      dataExpression = parameterLookup.getParamsRecord();
+    } else {
+      dataExpression = getDataRecordExpression(node, reattachPoint);
+    }
+    Expression paramStoreExpression =
+        ConstructorRef.AUGMENTED_PARAM_STORE.construct(
+            dataExpression, constant(node.numChildren()));
+    if (node.isPassingAllData()) {
+      paramStoreExpression =
+          maybeAddDefaultParams(node, paramStoreExpression).or(paramStoreExpression);
+    }
+    return paramStoreExpression;
+  }
+
+  private Optional<Expression> maybeAddDefaultParams(
+      CallNode node, Expression paramStoreExpression) {
+    boolean foundDefaultParams = false;
+    // If this is a data="all" call and the caller has default parameters we need to augment the
+    // params record to make sure any unset default parameters are set to the default in the
+    // params record. It's not worth it to determine if we're using the default value or not
+    // here, so just augment all default parameters with whatever value they ended up with.
+    for (TemplateParam param : node.getNearestAncestor(TemplateNode.class).getParams()) {
+      if (param.hasDefault()) {
+        foundDefaultParams = true;
+        paramStoreExpression =
+            MethodRef.PARAM_STORE_SET_FIELD.invoke(
+                paramStoreExpression,
+                BytecodeUtils.constant(param.name()),
+                parameterLookup.getParam(param));
+      }
+    }
+    return foundDefaultParams ? Optional.of(paramStoreExpression) : Optional.absent();
+  }
+
+  private Expression getDataRecordExpression(CallNode node, Label reattachPoint) {
+    return exprCompiler
+        .compile(node.getDataExpr(), reattachPoint)
+        .box()
+        .checkedCast(SoyRecord.class);
   }
 
   @Override
@@ -1119,9 +1152,15 @@ final class SoyNodeCompiler extends AbstractReturningSoyNodeVisitor<Statement> {
               ExtraCodeCompiler prefix,
               ExtraCodeCompiler suffix) {
             LetContentNode fakeLet =
-                LetContentNode.forVariable(/*id=*/ -1, node.getSourceLocation(), phname, null);
+                LetContentNode.forVariable(
+                    /*id=*/ -1,
+                    node.getSourceLocation(),
+                    "$" + phname,
+                    node.getSourceLocation(),
+                    null);
             // copy the node so we don't end up removing it from the parent as a side effect.
             fakeLet.addChild(SoyTreeUtils.cloneWithNewIds(node, new FixedIdGenerator(-1)));
+            fakeLet.setParent(node.getParent());
             return lazyClosureCompiler.compileLazyContent("ph", fakeLet, phname, prefix, suffix);
           }
         });

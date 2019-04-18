@@ -17,14 +17,18 @@
 package com.google.template.soy.passes;
 
 import static com.google.common.base.Preconditions.checkState;
+import static com.google.template.soy.passes.CheckTemplateCallsPass.ARGUMENT_TYPE_MISMATCH;
 
 import com.google.common.base.Equivalence.Wrapper;
 import com.google.common.base.Preconditions;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
+import com.google.common.collect.Lists;
 import com.google.common.collect.Maps;
+import com.google.protobuf.Descriptors.FieldDescriptor;
 import com.google.template.soy.base.SourceLocation;
 import com.google.template.soy.base.internal.IdGenerator;
+import com.google.template.soy.base.internal.Identifier;
 import com.google.template.soy.basicfunctions.AugmentMapFunction;
 import com.google.template.soy.basicfunctions.ConcatListsFunction;
 import com.google.template.soy.basicfunctions.KeysFunction;
@@ -71,7 +75,10 @@ import com.google.template.soy.exprtree.ProtoInitNode;
 import com.google.template.soy.exprtree.RecordLiteralNode;
 import com.google.template.soy.exprtree.StringNode;
 import com.google.template.soy.exprtree.VarRefNode;
+import com.google.template.soy.exprtree.VeLiteralNode;
 import com.google.template.soy.logging.LoggingFunction;
+import com.google.template.soy.logging.ValidatedLoggingConfig;
+import com.google.template.soy.logging.ValidatedLoggingConfig.ValidatedLoggableElement;
 import com.google.template.soy.plugin.restricted.SoySourceFunction;
 import com.google.template.soy.shared.internal.BuiltinFunction;
 import com.google.template.soy.shared.internal.ResolvedSignature;
@@ -92,8 +99,13 @@ import com.google.template.soy.soytree.SoyNode;
 import com.google.template.soy.soytree.SoyNode.ExprHolderNode;
 import com.google.template.soy.soytree.SoyNode.ParentSoyNode;
 import com.google.template.soy.soytree.SoyTreeUtils;
+import com.google.template.soy.soytree.SwitchCaseNode;
+import com.google.template.soy.soytree.SwitchDefaultNode;
+import com.google.template.soy.soytree.SwitchNode;
+import com.google.template.soy.soytree.TemplateElementNode;
 import com.google.template.soy.soytree.TemplateNode;
 import com.google.template.soy.soytree.defn.LoopVar;
+import com.google.template.soy.soytree.defn.TemplateHeaderVarDefn;
 import com.google.template.soy.types.AbstractMapType;
 import com.google.template.soy.types.BoolType;
 import com.google.template.soy.types.ErrorType;
@@ -113,6 +125,10 @@ import com.google.template.soy.types.SoyTypes;
 import com.google.template.soy.types.StringType;
 import com.google.template.soy.types.UnionType;
 import com.google.template.soy.types.UnknownType;
+import com.google.template.soy.types.VeDataType;
+import com.google.template.soy.types.VeType;
+import com.google.template.soy.types.ast.TypeNode;
+import com.google.template.soy.types.ast.TypeNodeConverter;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
@@ -127,7 +143,7 @@ import javax.annotation.Nullable;
  * Visitor which resolves all expression types.
  *
  */
-final class ResolveExpressionTypesPass extends CompilerFilePass {
+public final class ResolveExpressionTypesPass extends CompilerFilePass {
 
   // Keep in alphabetical order.
   private static final SoyErrorKind BAD_FOREACH_TYPE =
@@ -148,6 +164,9 @@ final class ResolveExpressionTypesPass extends CompilerFilePass {
       SoyErrorKind.of("Type {0} does not support dot access (consider record instead of map).");
   private static final SoyErrorKind DUPLICATE_KEY_IN_MAP_LITERAL =
       SoyErrorKind.of("Map literals with duplicate keys are not allowed.  Duplicate key: ''{0}''");
+  private static final SoyErrorKind KEYS_PASSED_MAP =
+      SoyErrorKind.of(
+          "Use the ''mapKeys'' function instead of ''keys'' for objects of type ''map''.");
   private static final SoyErrorKind ILLEGAL_MAP_RESOLVED_KEY_TYPE =
       SoyErrorKind.of(
           "A map''s keys must all be the same type. This map has keys of multiple types "
@@ -165,6 +184,8 @@ final class ResolveExpressionTypesPass extends CompilerFilePass {
           "Soy lists do not have a ''length'' field. Use function length(...) instead.");
   private static final SoyErrorKind MISSING_SOY_TYPE =
       SoyErrorKind.of("Missing Soy type for node {0}.");
+  private static final SoyErrorKind NOT_PROTO_INIT =
+      SoyErrorKind.of("Expected a protocol buffer for the second argument.");
   private static final SoyErrorKind NOT_A_PROTO_TYPE =
       SoyErrorKind.of("''{0}'' is a ''{1}'', expected a protocol buffer.");
   private static final SoyErrorKind OR_OPERATOR_HAS_CONSTANT_OPERAND =
@@ -184,10 +205,19 @@ final class ResolveExpressionTypesPass extends CompilerFilePass {
           "Undefined field ''{0}'' for record type {1}.{2}", StyleAllowance.NO_PUNCTUATION);
   private static final SoyErrorKind UNKNOWN_PROTO_TYPE =
       SoyErrorKind.of("Unknown proto type ''{0}''.");
-  private static final SoyErrorKind VAR_REF_MISSING_SOY_TYPE =
-      SoyErrorKind.of("Missing Soy type for variable.");
+  private static final SoyErrorKind PROTO_FIELD_DOES_NOT_EXIST =
+      SoyErrorKind.of("Proto field ''{0}'' does not exist.{1}", StyleAllowance.NO_PUNCTUATION);
+  private static final SoyErrorKind PROTO_MISSING_REQUIRED_FIELD =
+      SoyErrorKind.of("Missing required proto field ''{0}''.");
+  private static final SoyErrorKind PROTO_NULL_ARG_TYPE =
+      SoyErrorKind.of("Cannot assign static type ''null'' to proto field ''{0}''.");
   private static final SoyErrorKind TYPE_MISMATCH =
       SoyErrorKind.of("Soy types ''{0}'' and ''{1}'' are not comparable.");
+  private static final SoyErrorKind DECLARED_DEFAULT_TYPE_MISMATCH =
+      SoyErrorKind.of(
+          "The initializer for ''{0}'' has type ''{1}'' which is not assignable to type ''{2}''.");
+  private static final SoyErrorKind STATE_MUST_BE_CONSTANT =
+      SoyErrorKind.of("The initializer for ''{0}'' must be a constant value.  {1}.");
   private static final SoyErrorKind INCOMPATIBLE_ARITHMETIC_OP =
       SoyErrorKind.of("Using arithmetic operators on Soy types ''{0}'' and ''{1}'' is illegal.");
   private static final SoyErrorKind INCOMPATIBLE_ARITHMETIC_OP_UNARY =
@@ -198,19 +228,37 @@ final class ResolveExpressionTypesPass extends CompilerFilePass {
       SoyErrorKind.of("Function ''{0}'' must have a loop variable as its argument.");
   private static final SoyErrorKind STRING_LITERAL_REQUIRED =
       SoyErrorKind.of("Argument to function ''{0}'' must be a string literal.");
+  private static final SoyErrorKind EXPLICIT_NULL =
+      SoyErrorKind.of("Explicit use of the ''null'' type is not allowed.");
+  private static final SoyErrorKind INFERRED_NULL =
+      SoyErrorKind.of(
+          "The inferred type of this parameter is ''null'' which is not a useful type. "
+              + "Use an explicit type declaration to specify a wider type.");
+  private static final SoyErrorKind VE_NO_CONFIG_FOR_ELEMENT =
+      SoyErrorKind.of(
+          "Could not find logging configuration for this element.{0}",
+          StyleAllowance.NO_PUNCTUATION);
 
   private final ErrorReporter errorReporter;
   /** Type registry. */
   private final SoyTypeRegistry typeRegistry;
+
+  private final ValidatedLoggingConfig loggingConfig;
+  private final TypeNodeConverter typeNodeConverter;
   /** Cached map that converts a string representation of types to actual soy types. */
   private final Map<Signature, ResolvedSignature> signatureMap = new HashMap<>();
 
   /** Current set of type substitutions. */
   private TypeSubstitution substitutions;
 
-  ResolveExpressionTypesPass(SoyTypeRegistry typeRegistry, ErrorReporter errorReporter) {
+  ResolveExpressionTypesPass(
+      SoyTypeRegistry typeRegistry,
+      ErrorReporter errorReporter,
+      ValidatedLoggingConfig loggingConfig) {
     this.errorReporter = errorReporter;
     this.typeRegistry = typeRegistry;
+    this.loggingConfig = loggingConfig;
+    this.typeNodeConverter = new TypeNodeConverter(errorReporter, typeRegistry);
   }
 
   @Override
@@ -223,7 +271,73 @@ final class ResolveExpressionTypesPass extends CompilerFilePass {
 
     @Override
     protected void visitTemplateNode(TemplateNode node) {
-      visitSoyNode(node);
+      // need to visit expressions first so parameters with inferred types have their expressions
+      // analyzed
+      List<TemplateHeaderVarDefn> headerVars = Lists.newArrayList(node.getParams());
+      if (node.getKind() == SoyNode.Kind.TEMPLATE_ELEMENT_NODE) {
+        headerVars.addAll(((TemplateElementNode) node).getStateVars());
+      }
+
+      // If the default value expressions are not constant, they could reference another default
+      // value parameter, which won't work because it's looking up the type of the parameter when it
+      // hasn't been inferred yet.  So report an error and override the type to be the errortype
+      for (TemplateHeaderVarDefn headerVar : headerVars) {
+        if (headerVar.defaultValue() != null) {
+          for (ExprNode nonConstantChild :
+              SoyTreeUtils.getNonConstantChildren(headerVar.defaultValue())) {
+            String extra;
+            switch (nonConstantChild.getKind()) {
+              case VAR_REF_NODE:
+                extra = "Parameters are non-constant";
+                ((VarRefNode) nonConstantChild).setSubstituteType(ErrorType.getInstance());
+                break;
+              case FUNCTION_NODE:
+                extra = "Only pure functions can be used in state initializers";
+                break;
+              default:
+                throw new AssertionError("Unexpected non-constant expression: " + nonConstantChild);
+            }
+            errorReporter.report(
+                nonConstantChild.getSourceLocation(),
+                STATE_MUST_BE_CONSTANT,
+                headerVar.name(),
+                extra);
+          }
+        }
+      }
+
+      visitExpressions(node);
+
+      for (TemplateHeaderVarDefn headerVar : headerVars) {
+        if (headerVar.defaultValue() != null) {
+          SoyType actualType = headerVar.defaultValue().getRoot().getType();
+          if (headerVar.getTypeNode() != null) {
+            SoyType declaredType = headerVar.type();
+            if (declaredType.equals(NullType.getInstance())) {
+              errorReporter.report(headerVar.getTypeNode().sourceLocation(), EXPLICIT_NULL);
+            }
+            if (!declaredType.isAssignableFrom(actualType)) {
+              errorReporter.report(
+                  headerVar.defaultValue().getSourceLocation(),
+                  DECLARED_DEFAULT_TYPE_MISMATCH,
+                  headerVar.name(),
+                  actualType,
+                  declaredType);
+            }
+          } else {
+            // in this case the declaredType is inferred from the initializer expression, so just
+            // assign
+            headerVar.setType(actualType);
+            if (actualType.equals(NullType.getInstance())) {
+              errorReporter.report(headerVar.nameLocation(), INFERRED_NULL);
+            }
+          }
+        } else if (headerVar.type().equals(NullType.getInstance())) {
+          errorReporter.report(headerVar.getTypeNode().sourceLocation(), EXPLICIT_NULL);
+        }
+      }
+
+      visitChildren(node);
     }
 
     @Override
@@ -249,7 +363,6 @@ final class ResolveExpressionTypesPass extends CompilerFilePass {
 
     @Override
     protected void visitIfNode(IfNode node) {
-      // TODO(user): Also support switch / case.
       TypeSubstitution savedSubstitutionState = substitutions;
       for (SoyNode child : node.getChildren()) {
         if (child instanceof IfCondNode) {
@@ -282,6 +395,57 @@ final class ResolveExpressionTypesPass extends CompilerFilePass {
           // For the else node, we simply inherit the previous set of subsitutions.
           IfElseNode ien = (IfElseNode) child;
           visitChildren(ien);
+        }
+      }
+      substitutions = savedSubstitutionState;
+    }
+
+    @Override
+    protected void visitSwitchNode(SwitchNode node) {
+      visitExpressions(node);
+
+      TypeSubstitution savedSubstitutionState = substitutions;
+      ExprNode switchExpr = node.getExpr().getRoot();
+      for (SoyNode child : node.getChildren()) {
+        if (child instanceof SwitchCaseNode) {
+          SwitchCaseNode scn = ((SwitchCaseNode) child);
+          visitExpressions(scn);
+
+          // Calculate a new type for the switch expression: the union of the types of the case
+          // statement.
+          List<SoyType> caseTypes = new ArrayList<>();
+          boolean nullFound = false;
+          for (ExprRootNode expr : scn.getExprList()) {
+            caseTypes.add(expr.getType());
+            if (expr.getRoot().getKind() == ExprNode.Kind.NULL_NODE) {
+              nullFound = true;
+            }
+          }
+          SoyType caseType = typeRegistry.getOrCreateUnionType(caseTypes);
+
+          TypeSubstitution previousSubstitutionState = substitutions;
+
+          Map<Wrapper<ExprNode>, SoyType> positiveTypeConstraints = new HashMap<>();
+          positiveTypeConstraints.put(ExprEquivalence.get().wrap(switchExpr), caseType);
+          addTypeSubstitutions(positiveTypeConstraints);
+          visitChildren(scn);
+
+          substitutions = previousSubstitutionState;
+
+          if (nullFound) {
+            // If a case statement has a null literal, the switch expression can't be null for any
+            // of the following case statements.
+            Map<Wrapper<ExprNode>, SoyType> negativeTypeConstraints = new HashMap<>();
+            negativeTypeConstraints.put(
+                ExprEquivalence.get().wrap(switchExpr),
+                SoyTypes.tryRemoveNull(switchExpr.getType()));
+            addTypeSubstitutions(negativeTypeConstraints);
+          }
+        } else if (child instanceof SwitchDefaultNode) {
+          // No new type substitutions for a default statement, but inherit the previous (negative)
+          // subsitutions.
+          SwitchDefaultNode sdn = ((SwitchDefaultNode) child);
+          visitChildren(sdn);
         }
       }
       substitutions = savedSubstitutionState;
@@ -513,12 +677,16 @@ final class ResolveExpressionTypesPass extends CompilerFilePass {
 
     @Override
     protected void visitVarRefNode(VarRefNode varRef) {
-      if (varRef.getType() == null) {
-        errorReporter.report(varRef.getSourceLocation(), VAR_REF_MISSING_SOY_TYPE);
-      }
       SoyType newType = getTypeSubstitution(varRef);
       if (newType != null) {
         varRef.setSubstituteType(newType);
+      } else {
+        if (varRef.getType() == null) {
+          // sanity check, default params and state params have complex type initialization logic
+          // double check that it worked.
+          throw new IllegalStateException(
+              "VarRefNode @" + varRef.getSourceLocation() + " doesn't have a type!");
+        }
       }
     }
 
@@ -769,19 +937,20 @@ final class ResolveExpressionTypesPass extends CompilerFilePass {
       }
       ImmutableList.Builder<SoyType> paramTypes = ImmutableList.builder();
       for (String paramTypeString : signature.parameterTypes()) {
-        SoyType paramType =
-            SoyFileParser.parseType(paramTypeString, typeRegistry, className, errorReporter);
+        TypeNode paramType = SoyFileParser.parseType(paramTypeString, className, errorReporter);
         if (paramType == null) {
           return null;
         }
-        paramTypes.add(paramType);
+        paramTypes.add(typeNodeConverter.getOrCreateType(paramType));
       }
-      SoyType returnType =
-          SoyFileParser.parseType(signature.returnType(), typeRegistry, className, errorReporter);
+      TypeNode returnType =
+          SoyFileParser.parseType(signature.returnType(), className, errorReporter);
       if (returnType == null) {
         return null;
       }
-      resolvedSignature = ResolvedSignature.create(paramTypes.build(), returnType);
+      resolvedSignature =
+          ResolvedSignature.create(
+              paramTypes.build(), typeNodeConverter.getOrCreateType(returnType));
       signatureMap.put(signature, resolvedSignature);
       return resolvedSignature;
     }
@@ -850,6 +1019,9 @@ final class ResolveExpressionTypesPass extends CompilerFilePass {
           listArg = ((LegacyObjectMapType) argType).getKeyType(); // pretty much just string
         } else if (argType.getKind() == Kind.LIST) {
           listArg = IntType.getInstance();
+        } else if (argType.getKind() == Kind.MAP) {
+          errorReporter.report(node.getSourceLocation(), KEYS_PASSED_MAP);
+          listArg = ErrorType.getInstance();
         } else {
           listArg = UnknownType.getInstance();
         }
@@ -925,13 +1097,100 @@ final class ResolveExpressionTypesPass extends CompilerFilePass {
       if (type == null) {
         errorReporter.report(node.getSourceLocation(), UNKNOWN_PROTO_TYPE, protoName);
         node.setType(ErrorType.getInstance());
-      } else if (!(type.getKind() == SoyType.Kind.PROTO
-          || type.getKind() == SoyType.Kind.PROTO_ENUM)) {
+      } else if (type.getKind() != SoyType.Kind.PROTO) {
         errorReporter.report(node.getSourceLocation(), NOT_A_PROTO_TYPE, protoName, type);
         node.setType(ErrorType.getInstance());
       } else {
         node.setType(type);
+
+        // Check that all proto required fields are present.
+        SoyProtoType protoType = (SoyProtoType) type;
+        // TODO(user): Consider writing a soyProtoTypeImpl.getRequiredFields()
+        Set<String> givenParams = new HashSet<>();
+        for (Identifier id : node.getParamNames()) {
+          givenParams.add(id.identifier());
+        }
+        for (FieldDescriptor field : protoType.getDescriptor().getFields()) {
+          if (field.isRequired() && !givenParams.contains(field.getName())) {
+            errorReporter.report(
+                node.getSourceLocation(), PROTO_MISSING_REQUIRED_FIELD, field.getName());
+          }
+        }
+
+        ImmutableSet<String> fields = protoType.getFieldNames();
+        for (int i = 0; i < node.numChildren(); i++) {
+          Identifier fieldName = node.getParamNames().get(i);
+          ExprNode expr = node.getChild(i);
+
+          // Check that each arg exists in the proto.
+          if (!fields.contains(fieldName.identifier())) {
+            String extraErrorMessage =
+                SoyErrors.getDidYouMeanMessageForProtoFields(
+                    fields, protoType.getDescriptor(), fieldName.identifier());
+            errorReporter.report(
+                fieldName.location(),
+                PROTO_FIELD_DOES_NOT_EXIST,
+                fieldName.identifier(),
+                extraErrorMessage);
+            continue;
+          }
+
+          // Check that the arg type is not null and that it matches the expected field type.
+          SoyType argType = expr.getType();
+          if (argType.equals(NullType.getInstance())) {
+            errorReporter.report(
+                expr.getSourceLocation(), PROTO_NULL_ARG_TYPE, fieldName.identifier());
+          }
+
+          SoyType fieldType = protoType.getFieldType(fieldName.identifier());
+
+          // Let args with unknown or error types pass
+          if (argType.equals(UnknownType.getInstance())
+              || argType.equals(ErrorType.getInstance())) {
+            continue;
+          }
+
+          // Same for List<?>, for repeated fields
+          if (fieldType.getKind() == Kind.LIST && argType.getKind() == Kind.LIST) {
+            SoyType argElementType = ((ListType) argType).getElementType();
+            if (argElementType == null || argElementType.equals(UnknownType.getInstance())) {
+              continue;
+            }
+          }
+
+          SoyType expectedType = SoyTypes.makeNullable(fieldType);
+          if (!expectedType.isAssignableFrom(argType)) {
+            errorReporter.report(
+                expr.getSourceLocation(),
+                ARGUMENT_TYPE_MISMATCH,
+                fieldName.identifier(),
+                expectedType,
+                argType);
+          }
+        }
       }
+    }
+
+    @Override
+    protected void visitVeLiteralNode(VeLiteralNode node) {
+      SoyType type;
+      ValidatedLoggableElement config = loggingConfig.getElement(node.getName().identifier());
+      if (config == null) {
+        errorReporter.report(
+            node.getName().location(),
+            VE_NO_CONFIG_FOR_ELEMENT,
+            SoyErrors.getDidYouMeanMessage(
+                loggingConfig.allKnownIdentifiers(), node.getName().identifier()));
+        type = ErrorType.getInstance();
+      } else {
+        if (config.getProtoName().isPresent()) {
+          type = typeRegistry.getOrCreateVeType(config.getProtoName().get());
+        } else {
+          type = VeType.NO_DATA;
+        }
+        node.setId(config.getId());
+      }
+      node.setType(type);
     }
 
     private void visitComparisonOpNode(AbstractOperatorNode node) {
@@ -1107,6 +1366,8 @@ final class ResolveExpressionTypesPass extends CompilerFilePass {
         case TRUSTED_RESOURCE_URI:
         case MAP:
         case PROTO_ENUM:
+        case VE:
+        case VE_DATA:
           errorReporter.report(sourceLocation, DOT_ACCESS_NOT_SUPPORTED, baseType);
           return ErrorType.getInstance();
       }
@@ -1209,6 +1470,8 @@ final class ResolveExpressionTypesPass extends CompilerFilePass {
         case RECORD:
         case PROTO:
         case PROTO_ENUM:
+        case VE:
+        case VE_DATA:
           errorReporter.report(baseLocation, BRACKET_ACCESS_NOT_SUPPORTED, baseType);
           return ErrorType.getInstance();
       }
@@ -1246,8 +1509,6 @@ final class ResolveExpressionTypesPass extends CompilerFilePass {
      * built-in functions.
      */
     private void visitBuiltinFunction(BuiltinFunction builtinFunction, FunctionNode node) {
-      // Most non-plugin functions have exactly 1 arg
-      ExprNode arg1 = node.getChild(0);
       switch (builtinFunction) {
         case CHECK_NOT_NULL:
           SoyType type = node.getChild(0).getType();
@@ -1259,7 +1520,7 @@ final class ResolveExpressionTypesPass extends CompilerFilePass {
           }
           break;
         case INDEX:
-          requireLoopVariableInScope(node, arg1);
+          requireLoopVariableInScope(node, node.getChild(0));
           node.setType(IntType.getInstance());
           break;
         case IS_PRIMARY_MSG_IN_USE:
@@ -1268,7 +1529,7 @@ final class ResolveExpressionTypesPass extends CompilerFilePass {
           break;
         case IS_FIRST:
         case IS_LAST:
-          requireLoopVariableInScope(node, arg1);
+          requireLoopVariableInScope(node, node.getChild(0));
           node.setType(BoolType.getInstance());
           break;
         case CSS:
@@ -1280,9 +1541,17 @@ final class ResolveExpressionTypesPass extends CompilerFilePass {
           node.setType(StringType.getInstance());
           break;
         case V1_EXPRESSION:
-          checkArgIsStringLiteral(arg1, "v1Expression");
+          checkArgIsStringLiteral(node.getChild(0), "v1Expression");
           node.setType(UnknownType.getInstance());
           break;
+        case DEBUG_SOY_TEMPLATE_INFO:
+          node.setType(BoolType.getInstance());
+          break;
+        case VE_DATA:
+          // Arg validation is already handled by the VeLogValidationPass
+          node.setType(VeDataType.getInstance());
+          break;
+        case TO_FLOAT: // is added to the AST after this pass
         case REMAINDER:
         case MSG_WITH_ID: // should have already been removed from the tree
           throw new AssertionError();

@@ -21,6 +21,7 @@ import static com.google.template.soy.jssrc.dsl.Expression.LITERAL_EMPTY_STRING;
 import com.google.common.collect.ImmutableList;
 import com.google.template.soy.jssrc.dsl.CodeChunk.RequiresCollector;
 import com.google.template.soy.jssrc.restricted.JsExprUtils;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.regex.Pattern;
 
@@ -54,7 +55,7 @@ public final class CodeChunkUtils {
    * produce strings when combined with the plus operator; e.g. 2+2 might be 4 instead of '22'.
    *
    * <p>This is a port of {@link JsExprUtils#concatJsExprs}, which should eventually go away.
-   * TODO(user): make that go away.
+   * TODO(b/32224284): make that go away.
    */
   public static Expression concatChunks(List<? extends Expression> chunks) {
     return Concatenation.create(chunks);
@@ -78,7 +79,29 @@ public final class CodeChunkUtils {
       return concatChunks(chunks);
     } else {
       return concatChunks(
-          ImmutableList.<Expression>builder().add(LITERAL_EMPTY_STRING).addAll(chunks).build());
+          ImmutableList.of(LITERAL_EMPTY_STRING, Group.create(concatChunks(chunks))));
     }
+  }
+
+  /**
+   * Outputs a stringified parameter list (e.g. `foo, bar, baz`) from JsDoc. Used e.g. in function
+   * and method declarations.
+   */
+  static String generateParamList(JsDoc jsDoc) {
+    ImmutableList<JsDoc.Param> params = jsDoc.params();
+    List<String> functionParameters = new ArrayList<>();
+    for (JsDoc.Param param : params) {
+      if ("param".equals(param.annotationType())) {
+        functionParameters.add(param.paramTypeName());
+      }
+    }
+    StringBuilder sb = new StringBuilder();
+    for (int i = 0; i < functionParameters.size(); i++) {
+      sb.append(functionParameters.get(i));
+      if (i + 1 < functionParameters.size()) {
+        sb.append(", ");
+      }
+    }
+    return sb.toString();
   }
 }

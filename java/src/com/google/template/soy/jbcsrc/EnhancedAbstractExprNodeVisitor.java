@@ -23,9 +23,9 @@ import com.google.template.soy.exprtree.VarDefn;
 import com.google.template.soy.exprtree.VarRefNode;
 import com.google.template.soy.shared.internal.BuiltinFunction;
 import com.google.template.soy.soytree.SoyNode.LocalVarNode;
-import com.google.template.soy.soytree.defn.InjectedParam;
 import com.google.template.soy.soytree.defn.LocalVar;
 import com.google.template.soy.soytree.defn.TemplateParam;
+import com.google.template.soy.soytree.defn.TemplateStateVar;
 
 /**
  * An abstract base class that adds extra visitor methods for unpacking varrefs and functions based
@@ -63,13 +63,13 @@ abstract class EnhancedAbstractExprNodeVisitor<T> extends AbstractReturningExprN
         }
       case PARAM:
         return visitParam(node, (TemplateParam) defn);
-      case IJ_PARAM:
-        return visitIjParam(node, (InjectedParam) defn);
+      case STATE:
+        // State is inlined since it is always a constant
+        return visitStateNode(node, (TemplateStateVar) defn);
       case UNDECLARED:
         throw new RuntimeException("undeclared params are not supported by jbcsrc");
-      default:
-        throw new AssertionError();
     }
+    throw new AssertionError(defn.kind());
   }
 
   @Override
@@ -93,6 +93,12 @@ abstract class EnhancedAbstractExprNodeVisitor<T> extends AbstractReturningExprN
           return visitXidFunction(node);
         case IS_PRIMARY_MSG_IN_USE:
           return visitIsPrimaryMsgInUse(node);
+        case TO_FLOAT:
+          return visitToFloatFunction(node);
+        case DEBUG_SOY_TEMPLATE_INFO:
+          return visitDebugSoyTemplateInfoFunction(node);
+        case VE_DATA:
+          return visitVeDataFunction(node);
         case MSG_WITH_ID:
         case REMAINDER:
           // should have been removed earlier in the compiler
@@ -117,8 +123,8 @@ abstract class EnhancedAbstractExprNodeVisitor<T> extends AbstractReturningExprN
     return visitExprNode(varRef);
   }
 
-  T visitIjParam(VarRefNode varRef, InjectedParam ij) {
-    return visitExprNode(varRef);
+  T visitStateNode(VarRefNode node, TemplateStateVar state) {
+    return visitExprNode(node);
   }
 
   T visitIsFirstFunction(FunctionNode node) {
@@ -149,7 +155,20 @@ abstract class EnhancedAbstractExprNodeVisitor<T> extends AbstractReturningExprN
     return visitExprNode(node);
   }
 
+  T visitToFloatFunction(FunctionNode node) {
+    return visitExprNode(node);
+  }
+
+  T visitDebugSoyTemplateInfoFunction(FunctionNode node) {
+    return visitExprNode(node);
+  }
+
+  T visitVeDataFunction(FunctionNode node) {
+    return visitExprNode(node);
+  }
+
   T visitPluginFunction(FunctionNode node) {
     return visitExprNode(node);
   }
+
 }

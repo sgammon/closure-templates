@@ -25,6 +25,7 @@ import com.google.common.truth.FailureMetadata;
 import com.google.common.truth.Subject;
 import com.google.template.soy.SoyFileSetParserBuilder;
 import com.google.template.soy.error.ErrorReporter;
+import com.google.template.soy.internal.i18n.BidiGlobalDir;
 import com.google.template.soy.pysrc.SoyPySrcOptions;
 import com.google.template.soy.shared.SharedTestUtils;
 import com.google.template.soy.soytree.SoyFileSetNode;
@@ -46,7 +47,7 @@ public final class SoyCodeForPySubject extends Subject<SoyCodeForPySubject, Stri
 
   private String translationClass = "";
 
-  private ImmutableMap<String, String> namespaceManifest = ImmutableMap.<String, String>of();
+  private ImmutableMap<String, String> namespaceManifest = ImmutableMap.of();
 
   private boolean isFile;
 
@@ -154,7 +155,8 @@ public final class SoyCodeForPySubject extends Subject<SoyCodeForPySubject, Stri
   private String compileFile() {
     SoyFileSetNode node = SoyFileSetParserBuilder.forFileContents(actual()).parse().fileSet();
     List<String> fileContents =
-        PySrcMain.createVisitor(defaultOptions(), ImmutableMap.<String, String>of())
+        PySrcMain.createVisitor(
+                defaultOptions(), BidiGlobalDir.LTR, ErrorReporter.exploding(), ImmutableMap.of())
             .gen(node, ErrorReporter.exploding());
     return fileContents.get(0).replaceAll("([a-zA-Z]+)\\d+", "$1###");
   }
@@ -166,7 +168,8 @@ public final class SoyCodeForPySubject extends Subject<SoyCodeForPySubject, Stri
 
     // Setup the GenPyCodeVisitor's state before the node is visited.
     GenPyCodeVisitor genPyCodeVisitor =
-        PySrcMain.createVisitor(defaultOptions(), ImmutableMap.<String, String>of());
+        PySrcMain.createVisitor(
+            defaultOptions(), BidiGlobalDir.LTR, ErrorReporter.exploding(), ImmutableMap.of());
     genPyCodeVisitor.pyCodeBuilder = new PyCodeBuilder();
     genPyCodeVisitor.pyCodeBuilder.pushOutputVar("output");
     genPyCodeVisitor.pyCodeBuilder.setOutputVarInited();

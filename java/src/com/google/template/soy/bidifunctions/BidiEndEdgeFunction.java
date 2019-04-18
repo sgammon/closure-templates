@@ -16,22 +16,21 @@
 
 package com.google.template.soy.bidifunctions;
 
-import com.google.common.base.Supplier;
-import com.google.common.collect.ImmutableSet;
-import com.google.template.soy.exprtree.Operator;
 import com.google.template.soy.internal.i18n.BidiGlobalDir;
-import com.google.template.soy.jssrc.restricted.JsExpr;
-import com.google.template.soy.jssrc.restricted.SoyLibraryAssistedJsSrcFunction;
 import com.google.template.soy.plugin.java.restricted.JavaPluginContext;
 import com.google.template.soy.plugin.java.restricted.JavaValue;
 import com.google.template.soy.plugin.java.restricted.JavaValueFactory;
 import com.google.template.soy.plugin.java.restricted.SoyJavaSourceFunction;
-import com.google.template.soy.pysrc.restricted.PyExpr;
-import com.google.template.soy.pysrc.restricted.PyExprUtils;
-import com.google.template.soy.pysrc.restricted.SoyPySrcFunction;
+import com.google.template.soy.plugin.javascript.restricted.JavaScriptPluginContext;
+import com.google.template.soy.plugin.javascript.restricted.JavaScriptValue;
+import com.google.template.soy.plugin.javascript.restricted.JavaScriptValueFactory;
+import com.google.template.soy.plugin.javascript.restricted.SoyJavaScriptSourceFunction;
+import com.google.template.soy.plugin.python.restricted.PythonPluginContext;
+import com.google.template.soy.plugin.python.restricted.PythonValue;
+import com.google.template.soy.plugin.python.restricted.PythonValueFactory;
+import com.google.template.soy.plugin.python.restricted.SoyPythonSourceFunction;
 import com.google.template.soy.shared.restricted.Signature;
 import com.google.template.soy.shared.restricted.SoyFunctionSignature;
-import com.google.template.soy.shared.restricted.TypedSoyFunction;
 import java.lang.reflect.Method;
 import java.util.List;
 
@@ -41,16 +40,8 @@ import java.util.List;
  *
  */
 @SoyFunctionSignature(name = "bidiEndEdge", value = @Signature(returnType = "string"))
-final class BidiEndEdgeFunction extends TypedSoyFunction
-    implements SoyJavaSourceFunction, SoyLibraryAssistedJsSrcFunction, SoyPySrcFunction {
-
-  /** Supplier for the current bidi global directionality. */
-  private final Supplier<BidiGlobalDir> bidiGlobalDirProvider;
-
-  /** @param bidiGlobalDirProvider Supplier for the current bidi global directionality. */
-  BidiEndEdgeFunction(Supplier<BidiGlobalDir> bidiGlobalDirProvider) {
-    this.bidiGlobalDirProvider = bidiGlobalDirProvider;
-  }
+final class BidiEndEdgeFunction
+    implements SoyJavaSourceFunction, SoyJavaScriptSourceFunction, SoyPythonSourceFunction {
 
   // lazy singleton pattern, allows other backends to avoid the work.
   private static final class Methods {
@@ -66,27 +57,14 @@ final class BidiEndEdgeFunction extends TypedSoyFunction
   }
 
   @Override
-  public JsExpr computeForJsSrc(List<JsExpr> args) {
-    BidiGlobalDir bidiGlobalDir = bidiGlobalDirProvider.get();
-    if (bidiGlobalDir.isStaticValue()) {
-      return new JsExpr(
-          (bidiGlobalDir.getStaticValue() < 0) ? "'left'" : "'right'", Integer.MAX_VALUE);
-    }
-    return new JsExpr(
-        "(" + bidiGlobalDir.getCodeSnippet() + ") < 0 ? 'left' : 'right'",
-        Operator.CONDITIONAL.getPrecedence());
+  public JavaScriptValue applyForJavaScriptSource(
+      JavaScriptValueFactory factory, List<JavaScriptValue> args, JavaScriptPluginContext context) {
+    return factory.callNamespaceFunction("soy", "soy.$$bidiEndEdge", context.getBidiDir());
   }
 
   @Override
-  public ImmutableSet<String> getRequiredJsLibNames() {
-    return ImmutableSet.copyOf(bidiGlobalDirProvider.get().getNamespace().asSet());
-  }
-
-  @Override
-  public PyExpr computeForPySrc(List<PyExpr> args) {
-    BidiGlobalDir bidiGlobalDir = bidiGlobalDirProvider.get();
-    return new PyExpr(
-        "'left' if (" + bidiGlobalDir.getCodeSnippet() + ") < 0 else 'right'",
-        PyExprUtils.pyPrecedenceForOperator(Operator.CONDITIONAL));
+  public PythonValue applyForPythonSource(
+      PythonValueFactory factory, List<PythonValue> args, PythonPluginContext context) {
+    return factory.global("bidi.bidi_end_edge").call(context.getBidiDir());
   }
 }

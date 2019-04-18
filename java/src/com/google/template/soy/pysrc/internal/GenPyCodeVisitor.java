@@ -20,7 +20,6 @@ import com.google.auto.value.AutoValue;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Preconditions;
 import com.google.common.collect.ImmutableMap;
-import com.google.template.soy.base.internal.SoyFileKind;
 import com.google.template.soy.error.ErrorReporter;
 import com.google.template.soy.error.SoyErrorKind;
 import com.google.template.soy.exprtree.ExprNode;
@@ -44,6 +43,7 @@ import com.google.template.soy.soytree.ForNonemptyNode;
 import com.google.template.soy.soytree.IfCondNode;
 import com.google.template.soy.soytree.IfElseNode;
 import com.google.template.soy.soytree.IfNode;
+import com.google.template.soy.soytree.KeyNode;
 import com.google.template.soy.soytree.LetContentNode;
 import com.google.template.soy.soytree.LetValueNode;
 import com.google.template.soy.soytree.LogNode;
@@ -59,8 +59,8 @@ import com.google.template.soy.soytree.SwitchNode;
 import com.google.template.soy.soytree.TemplateDelegateNode;
 import com.google.template.soy.soytree.TemplateNode;
 import com.google.template.soy.soytree.VeLogNode;
-import com.google.template.soy.soytree.defn.HeaderParam;
 import com.google.template.soy.soytree.defn.TemplateParam;
+import com.google.template.soy.types.ast.TypeNode;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -95,6 +95,7 @@ final class GenPyCodeVisitor extends AbstractSoyNodeVisitor<List<String>> {
   @VisibleForTesting protected GenPyExprsVisitor genPyExprsVisitor;
 
   private final GenPyCallExprVisitor genPyCallExprVisitor;
+  private final PythonValueFactoryImpl pluginValueFactory;
 
   /** @see LocalVariableStack */
   @VisibleForTesting protected LocalVariableStack localVarExprs;
@@ -104,11 +105,13 @@ final class GenPyCodeVisitor extends AbstractSoyNodeVisitor<List<String>> {
       ImmutableMap<String, String> currentManifest,
       IsComputableAsPyExprVisitor isComputableAsPyExprVisitor,
       GenPyExprsVisitorFactory genPyExprsVisitorFactory,
-      GenPyCallExprVisitor genPyCallExprVisitor) {
+      GenPyCallExprVisitor genPyCallExprVisitor,
+      PythonValueFactoryImpl pluginValueFactory) {
     this.pySrcOptions = pySrcOptions;
     this.isComputableAsPyExprVisitor = isComputableAsPyExprVisitor;
     this.genPyExprsVisitorFactory = genPyExprsVisitorFactory;
     this.genPyCallExprVisitor = genPyCallExprVisitor;
+    this.pluginValueFactory = pluginValueFactory;
 
     this.namespaceManifest =
         new ImmutableMap.Builder<String, String>()
@@ -215,11 +218,6 @@ final class GenPyCodeVisitor extends AbstractSoyNodeVisitor<List<String>> {
      */
     @Override
     protected void visitSoyFileNode(SoyFileNode node) {
-
-      if (node.getSoyFileKind() != SoyFileKind.SRC) {
-        return; // don't generate code for deps
-      }
-
       pyCodeBuilder = new PyCodeBuilder();
 
       // Encode all source files in utf-8 to allow for special unicode characters in the generated
@@ -275,8 +273,12 @@ final class GenPyCodeVisitor extends AbstractSoyNodeVisitor<List<String>> {
     protected void visitTemplateNode(TemplateNode node) {
       localVarExprs = new LocalVariableStack();
       for (TemplateParam param : node.getParams()) {
-        if (param instanceof HeaderParam) {
-          ((HeaderParam) param).getTypeNode().accept(new LegacyObjectMapFinder(errorReporter));
+        TypeNode type = param.getTypeNode();
+        // Skip this if it's a param with a default value and an inferred type. We don't have to
+        // worry about a legacy_object_map sneaking in through an inferred type because there is
+        // no legacy_object_map literal syntax: http://b/79368576
+        if (type != null) {
+          type.accept(new LegacyObjectMapFinder(errorReporter));
         }
       }
 
@@ -364,7 +366,7 @@ final class GenPyCodeVisitor extends AbstractSoyNodeVisitor<List<String>> {
 
       // Not computable as Python expressions, so generate full code.
       TranslateToPyExprVisitor translator =
-          new TranslateToPyExprVisitor(localVarExprs, errorReporter);
+          new TranslateToPyExprVisitor(localVarExprs, pluginValueFactory, errorReporter);
       for (SoyNode child : node.getChildren()) {
         if (child instanceof IfCondNode) {
           IfCondNode icn = (IfCondNode) child;
@@ -427,7 +429,7 @@ final class GenPyCodeVisitor extends AbstractSoyNodeVisitor<List<String>> {
     protected void visitSwitchNode(SwitchNode node) {
       // Run the switch value creation first to ensure side effects always occur.
       TranslateToPyExprVisitor translator =
-          new TranslateToPyExprVisitor(localVarExprs, errorReporter);
+          new TranslateToPyExprVisitor(localVarExprs, pluginValueFactory, errorReporter);
       String switchValueVarName = "switchValue";
       PyExpr switchValuePyExpr = translator.exec(node.getExpr());
       pyCodeBuilder.appendLine(switchValueVarName, " = ", switchValuePyExpr.getText());
@@ -511,7 +513,7 @@ final class GenPyCodeVisitor extends AbstractSoyNodeVisitor<List<String>> {
 
       // Define list variable
       TranslateToPyExprVisitor translator =
-          new TranslateToPyExprVisitor(localVarExprs, errorReporter);
+          new TranslateToPyExprVisitor(localVarExprs, pluginValueFactory, errorReporter);
       PyExpr dataRefPyExpr = translator.exec(node.getExpr());
       pyCodeBuilder.appendLine(listVarName, " = ", dataRefPyExpr.getText());
 
@@ -622,7 +624,7 @@ final class GenPyCodeVisitor extends AbstractSoyNodeVisitor<List<String>> {
 
       // Generate code to define the local var.
       TranslateToPyExprVisitor translator =
-          new TranslateToPyExprVisitor(localVarExprs, errorReporter);
+          new TranslateToPyExprVisitor(localVarExprs, pluginValueFactory, errorReporter);
       PyExpr valuePyExpr = translator.exec(node.getExpr());
       pyCodeBuilder.appendLine(generatedVarName, " = ", valuePyExpr.getText());
 
@@ -716,7 +718,7 @@ final class GenPyCodeVisitor extends AbstractSoyNodeVisitor<List<String>> {
     protected void visitVeLogNode(VeLogNode node) {
       if (node.getLogonlyExpression() != null) {
         TranslateToPyExprVisitor translator =
-            new TranslateToPyExprVisitor(localVarExprs, errorReporter);
+            new TranslateToPyExprVisitor(localVarExprs, pluginValueFactory, errorReporter);
         PyExpr isLogonly = translator.exec(node.getLogonlyExpression());
         pyCodeBuilder.appendLine("if ", isLogonly.getText(), ":");
         pyCodeBuilder.increaseIndent();
@@ -732,6 +734,11 @@ final class GenPyCodeVisitor extends AbstractSoyNodeVisitor<List<String>> {
     @Override
     protected void visitDebuggerNode(DebuggerNode node) {
       pyCodeBuilder.appendLine("pdb.set_trace()");
+    }
+
+    @Override
+    protected void visitKeyNode(KeyNode node) {
+      // Do nothing. Outside of incremental dom, key nodes are a no-op.
     }
 
     @Override

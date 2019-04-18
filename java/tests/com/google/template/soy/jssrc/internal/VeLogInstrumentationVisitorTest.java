@@ -19,7 +19,6 @@ import static com.google.common.truth.Truth.assertThat;
 
 import com.google.common.base.Joiner;
 import com.google.common.collect.ImmutableList;
-import com.google.common.collect.ImmutableSet;
 import com.google.common.truth.StringSubject;
 import com.google.template.soy.SoyFileSetParser.ParseResult;
 import com.google.template.soy.SoyFileSetParserBuilder;
@@ -28,10 +27,11 @@ import com.google.template.soy.logging.LoggableElement;
 import com.google.template.soy.logging.LoggingConfig;
 import com.google.template.soy.logging.LoggingFunction;
 import com.google.template.soy.logging.ValidatedLoggingConfig;
+import com.google.template.soy.shared.restricted.Signature;
+import com.google.template.soy.shared.restricted.SoyFunctionSignature;
 import com.google.template.soy.soytree.SoyFileSetNode;
 import com.google.template.soy.soytree.TemplateRegistry;
 import com.google.template.soy.types.SoyTypeRegistry;
-import java.util.Set;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
@@ -56,35 +56,51 @@ public final class VeLogInstrumentationVisitorTest {
     assertThatSourceString(runPass("")).isEqualTo("");
     assertThatSourceString(runPass("<div></div>")).isEqualTo("<div></div>");
     assertThatSourceString(runPass("{velog Foo}<div></div>{/velog}"))
-        .isEqualTo("{velog Foo}" + "<div{$$velog(1, null)}>" + "</div>" + "{/velog}");
+        .isEqualTo(
+            "{velog ve_data(ve(Foo), null)}"
+                + "<div{$$velog(ve_data(ve(Foo), null))}>"
+                + "</div>"
+                + "{/velog}");
     assertThatSourceString(runPass("{velog Bar}<input/>{/velog}"))
-        .isEqualTo("{velog Bar}" + "<input{$$velog(2, null)}/>" + "{/velog}");
+        .isEqualTo(
+            "{velog ve_data(ve(Bar), null)}"
+                + "<input{$$velog(ve_data(ve(Bar), null))}/>"
+                + "{/velog}");
     assertThatSourceString(runPass("{velog Bar logonly=\"true\"}<input/>{/velog}"))
         .isEqualTo(
-            "{velog Bar logonly=\"true\"}" + "<input{$$velog(2, null, true)}/>" + "{/velog}");
+            "{velog ve_data(ve(Bar), null) logonly=\"true\"}"
+                + "<input{$$velog(ve_data(ve(Bar), null), true)}/>"
+                + "{/velog}");
     assertThatSourceString(
             runPass("{@param foo: bool}" + "{velog Bar logonly=\"$foo\"}<input/>{/velog}"))
         .isEqualTo(
-            "{velog Bar logonly=\"$foo\"}" + "<input{$$velog(2, null, $foo)}/>" + "{/velog}");
+            "{velog ve_data(ve(Bar), null) logonly=\"$foo\"}"
+                + "<input{$$velog(ve_data(ve(Bar), null), $foo)}/>"
+                + "{/velog}");
   }
 
   @Test
   public void testVeLogInstrumentationWithAttributes() throws Exception {
     assertThatSourceString(runPass("{velog Baz}<div id=\"1\"></div>{/velog}"))
-        .isEqualTo("{velog Baz}" + "<div id=\"1\"{$$velog(3, null)}>" + "</div>" + "{/velog}");
+        .isEqualTo(
+            "{velog ve_data(ve(Baz), null)}"
+                + "<div id=\"1\"{$$velog(ve_data(ve(Baz), null))}>"
+                + "</div>"
+                + "{/velog}");
     assertThatSourceString(runPass("{velog Bar logonly=\"true\"}<input id=\"1\"/>{/velog}"))
         .isEqualTo(
-            "{velog Bar logonly=\"true\"}"
-                + "<input id=\"1\"{$$velog(2, null, true)}/>"
+            "{velog ve_data(ve(Bar), null) logonly=\"true\"}"
+                + "<input id=\"1\"{$$velog(ve_data(ve(Bar), null), true)}/>"
                 + "{/velog}");
     assertThatSourceString(
             runPass(
-                "{velog Foo data=\"soy.test.Foo(intField: 123)\"}"
+                "{velog ve_data(Foo, soy.test.Foo(intField: 123))}"
                     + "<input id=\"1\" class=\"fooClass\"/>"
                     + "{/velog}"))
         .isEqualTo(
-            "{velog Foo data=\"soy.test.Foo(intField: 123)\"}"
-                + "<input id=\"1\" class=\"fooClass\"{$$velog(1, soy.test.Foo(intField: 123))}/>"
+            "{velog ve_data(ve(Foo), soy.test.Foo(intField: 123))}"
+                + "<input id=\"1\" class=\"fooClass\""
+                + "{$$velog(ve_data(ve(Foo), soy.test.Foo(intField: 123)))}/>"
                 + "{/velog}");
   }
 
@@ -93,11 +109,11 @@ public final class VeLogInstrumentationVisitorTest {
     // Multiple velogs
     assertThatSourceString(runPass("{velog Foo}<div></div>{/velog}{velog Bar}<div></div>{/velog}"))
         .isEqualTo(
-            "{velog Foo}"
-                + "<div{$$velog(1, null)}>"
+            "{velog ve_data(ve(Foo), null)}"
+                + "<div{$$velog(ve_data(ve(Foo), null))}>"
                 + "</div>{/velog}"
-                + "{velog Bar}"
-                + "<div{$$velog(2, null)}>"
+                + "{velog ve_data(ve(Bar), null)}"
+                + "<div{$$velog(ve_data(ve(Bar), null))}>"
                 + "</div>{/velog}");
   }
 
@@ -106,10 +122,10 @@ public final class VeLogInstrumentationVisitorTest {
     // Nested
     assertThatSourceString(runPass("{velog Bar}<div>{velog Baz}<div></div>{/velog}</div>{/velog}"))
         .isEqualTo(
-            "{velog Bar}"
-                + "<div{$$velog(2, null)}>"
-                + "{velog Baz}"
-                + "<div{$$velog(3, null)}>"
+            "{velog ve_data(ve(Bar), null)}"
+                + "<div{$$velog(ve_data(ve(Bar), null))}>"
+                + "{velog ve_data(ve(Baz), null)}"
+                + "<div{$$velog(ve_data(ve(Baz), null))}>"
                 + "</div>{/velog}</div>{/velog}");
   }
 
@@ -118,20 +134,20 @@ public final class VeLogInstrumentationVisitorTest {
     assertThatSourceString(
             runPass("{velog Bar}<div><span data-ved={currentVed()}></span></div>{/velog}"))
         .isEqualTo(
-            "{velog Bar}"
-                + "<div{$$velog(2, null)}>"
+            "{velog ve_data(ve(Bar), null)}"
+                + "<div{$$velog(ve_data(ve(Bar), null))}>"
                 + "<span data-ved=\"placeholder\""
-                + "{$$loggingFunction('currentVed', [], 'data-ved', 0)}>"
+                + "{$$loggingFunction('currentVed', [], 'data-ved')}>"
                 + "</span>"
                 + "</div>"
                 + "{/velog}");
     assertThatSourceString(
             runPass("{velog Bar}<div><span data-ved={currentVed(1)}></span></div>{/velog}"))
         .isEqualTo(
-            "{velog Bar}"
-                + "<div{$$velog(2, null)}>"
+            "{velog ve_data(ve(Bar), null)}"
+                + "<div{$$velog(ve_data(ve(Bar), null))}>"
                 + "<span data-ved=\"placeholder\""
-                + "{$$loggingFunction('currentVed', [1], 'data-ved', 0)}>"
+                + "{$$loggingFunction('currentVed', [1], 'data-ved')}>"
                 + "</span>"
                 + "</div>"
                 + "{/velog}");
@@ -145,12 +161,12 @@ public final class VeLogInstrumentationVisitorTest {
                 "{let $foo : 'data-ved' /}"
                     + "{velog Bar}<div><span {$foo}={currentVed()}></span></div>{/velog}"))
         .isEqualTo(
-            "{let $foo : 'data-ved' /}{velog Bar}"
-                + "<div{$$velog(2, null)}>"
+            "{let $foo : 'data-ved' /}{velog ve_data(ve(Bar), null)}"
+                + "<div{$$velog(ve_data(ve(Bar), null))}>"
                 + "<span"
-                + "{let $soy_logging_function_attribute_0}{$foo}{/let} "
-                + "{$soy_logging_function_attribute_0}=\"placeholder\""
-                + "{$$loggingFunction('currentVed', [], $soy_logging_function_attribute_0, 0)}"
+                + "{let $soy_logging_function_attribute_16}{$foo}{/let} "
+                + "{$soy_logging_function_attribute_16}=\"placeholder\""
+                + "{$$loggingFunction('currentVed', [], $soy_logging_function_attribute_16)}"
                 + "></span>"
                 + "</div>"
                 + "{/velog}");
@@ -162,15 +178,15 @@ public final class VeLogInstrumentationVisitorTest {
                     + "<span {$foo}={currentVed()} {$bar}={currentVed(1)}></span>"
                     + "</div>{/velog}"))
         .isEqualTo(
-            "{velog Bar}"
-                + "<div{$$velog(2, null)}>"
+            "{velog ve_data(ve(Bar), null)}"
+                + "<div{$$velog(ve_data(ve(Bar), null))}>"
                 + "<span"
-                + "{let $soy_logging_function_attribute_0}{$foo}{/let} "
-                + "{$soy_logging_function_attribute_0}=\"placeholder\""
-                + "{$$loggingFunction('currentVed', [], $soy_logging_function_attribute_0, 0)}"
-                + "{let $soy_logging_function_attribute_1}{$bar}{/let} "
-                + "{$soy_logging_function_attribute_1}=\"placeholder\""
-                + "{$$loggingFunction('currentVed', [1], $soy_logging_function_attribute_1, 1)}"
+                + "{let $soy_logging_function_attribute_19}{$foo}{/let} "
+                + "{$soy_logging_function_attribute_19}=\"placeholder\""
+                + "{$$loggingFunction('currentVed', [], $soy_logging_function_attribute_19)}"
+                + "{let $soy_logging_function_attribute_21}{$bar}{/let} "
+                + "{$soy_logging_function_attribute_21}=\"placeholder\""
+                + "{$$loggingFunction('currentVed', [1], $soy_logging_function_attribute_21)}"
                 + ">"
                 + "</span>"
                 + "</div>"
@@ -187,16 +203,16 @@ public final class VeLogInstrumentationVisitorTest {
                     + "></span>"
                     + "</div>{/velog}"))
         .isEqualTo(
-            "{velog Bar}"
-                + "<div{$$velog(2, null)}>"
+            "{velog ve_data(ve(Bar), null)}"
+                + "<div{$$velog(ve_data(ve(Bar), null))}>"
                 + "<span"
-                + "{let $soy_logging_function_attribute_0}{$foo}{/let} "
-                + "{$soy_logging_function_attribute_0}=\"placeholder\""
-                + "{$$loggingFunction('currentVed', [], $soy_logging_function_attribute_0, 0)}"
+                + "{let $soy_logging_function_attribute_24}{$foo}{/let} "
+                + "{$soy_logging_function_attribute_24}=\"placeholder\""
+                + "{$$loggingFunction('currentVed', [], $soy_logging_function_attribute_24)}"
                 + "{let $baz kind=\"html\"}<input>{/let}"
-                + "{let $soy_logging_function_attribute_1}{$bar}{/let} "
-                + "{$soy_logging_function_attribute_1}=\"placeholder\""
-                + "{$$loggingFunction('currentVed', [1], $soy_logging_function_attribute_1, 1)}"
+                + "{let $soy_logging_function_attribute_26}{$bar}{/let} "
+                + "{$soy_logging_function_attribute_26}=\"placeholder\""
+                + "{$$loggingFunction('currentVed', [1], $soy_logging_function_attribute_26)}"
                 + ">"
                 + "</span>"
                 + "</div>"
@@ -216,8 +232,8 @@ public final class VeLogInstrumentationVisitorTest {
     node.getChild(0).getChild(0).appendSourceStringForChildren(sb);
     assertThat(sb.toString())
         .isEqualTo(
-            "{velog Bar}"
-                + "<div{$$velog(2, null)}>"
+            "{velog ve_data(ve(Bar), null)}"
+                + "<div{$$velog(ve_data(ve(Bar), null))}>"
                 + "<span {call .attr}{param foo : 'data-ved' /}{/call}>"
                 + "</span>"
                 + "</div>"
@@ -226,22 +242,20 @@ public final class VeLogInstrumentationVisitorTest {
     node.getChild(0).getChild(1).appendSourceStringForChildren(sb);
     assertThat(sb.toString())
         .isEqualTo(
-            "{let $soy_logging_function_attribute_0}{$foo}{/let}"
-                + "{$soy_logging_function_attribute_0}=\"placeholder\""
-                + "{$$loggingFunction('currentVed', [], $soy_logging_function_attribute_0, 0)}");
+            "{let $soy_logging_function_attribute_24}{$foo}{/let}"
+                + "{$soy_logging_function_attribute_24}=\"placeholder\""
+                + "{$$loggingFunction('currentVed', [], $soy_logging_function_attribute_24)}");
   }
 
+  @SoyFunctionSignature(
+      name = "currentVed",
+      value = {
+        @Signature(returnType = "string"),
+        @Signature(
+            parameterTypes = {"int"},
+            returnType = "string")
+      })
   private static final class TestLoggingFunction implements LoggingFunction {
-    @Override
-    public String getName() {
-      return "currentVed";
-    }
-
-    @Override
-    public Set<Integer> getValidArgsSizes() {
-      return ImmutableSet.of(0, 1);
-    }
-
     @Override
     public String getPlaceholder() {
       return "placeholder";
@@ -262,7 +276,7 @@ public final class VeLogInstrumentationVisitorTest {
                         ImmutableList.of(com.google.template.soy.testing.Foo.getDescriptor()))
                     .build())
             .setLoggingConfig(LOGGING_CONFIG)
-            .addSoyFunction(new TestLoggingFunction())
+            .addSoySourceFunction(new TestLoggingFunction())
             .errorReporter(ErrorReporter.exploding())
             .parse();
     TemplateRegistry templateRegistry = result.registry();

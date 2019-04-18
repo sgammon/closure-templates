@@ -30,6 +30,7 @@ import static com.google.template.soy.jbcsrc.restricted.BytecodeUtils.isPrimitiv
 import static com.google.template.soy.jbcsrc.restricted.BytecodeUtils.numericConversion;
 import static com.google.template.soy.jbcsrc.restricted.BytecodeUtils.unboxUnchecked;
 
+import com.google.common.base.Function;
 import com.google.common.base.Preconditions;
 import com.google.common.base.Supplier;
 import com.google.common.collect.ImmutableList;
@@ -57,9 +58,12 @@ import com.google.protobuf.GeneratedMessage.ExtendableMessage;
 import com.google.protobuf.GeneratedMessage.GeneratedExtension;
 import com.google.protobuf.Message;
 import com.google.protobuf.ProtocolMessageEnum;
-import com.google.template.soy.base.internal.SanitizedContentKind;
 import com.google.template.soy.data.SanitizedContent;
+import com.google.template.soy.data.SanitizedContents;
+import com.google.template.soy.exprtree.ExprNode;
 import com.google.template.soy.exprtree.FieldAccessNode;
+import com.google.template.soy.exprtree.ListLiteralNode;
+import com.google.template.soy.exprtree.MapLiteralNode;
 import com.google.template.soy.exprtree.ProtoInitNode;
 import com.google.template.soy.internal.proto.JavaQualifiedNames;
 import com.google.template.soy.jbcsrc.TemplateVariableManager.Scope;
@@ -77,9 +81,9 @@ import com.google.template.soy.jbcsrc.restricted.Statement;
 import com.google.template.soy.jbcsrc.restricted.TypeInfo;
 import com.google.template.soy.types.ListType;
 import com.google.template.soy.types.MapType;
-import com.google.template.soy.types.SanitizedType;
 import com.google.template.soy.types.SoyProtoType;
 import com.google.template.soy.types.SoyType;
+import java.util.ArrayList;
 import java.util.List;
 import javax.annotation.Nullable;
 import org.objectweb.asm.Label;
@@ -137,33 +141,31 @@ final class ProtoUtils {
   // We use the full name as the key instead of the descriptor, since descriptors use identity
   // semantics for equality and we may load the descriptors for these protos from multiple sources
   // depending on our configuration.
-  private static final ImmutableMap<String, MethodRef> SAFE_PROTO_TO_ACCESSOR =
+  private static final ImmutableMap<String, MethodRef> SAFE_PROTO_TO_SANITIZED_CONTENT =
       ImmutableMap.<String, MethodRef>builder()
-          .put(SafeHtmlProto.getDescriptor().getFullName(), createSafeAccessor(SafeHtmlProto.class))
+          .put(
+              SafeHtmlProto.getDescriptor().getFullName(),
+              createSafeProtoToSanitizedContentFactoryMethod(SafeHtmlProto.class))
           .put(
               SafeScriptProto.getDescriptor().getFullName(),
-              createSafeAccessor(SafeScriptProto.class))
+              createSafeProtoToSanitizedContentFactoryMethod(SafeScriptProto.class))
           .put(
               SafeStyleProto.getDescriptor().getFullName(),
-              createSafeAccessor(SafeStyleProto.class))
+              createSafeProtoToSanitizedContentFactoryMethod(SafeStyleProto.class))
           .put(
               SafeStyleSheetProto.getDescriptor().getFullName(),
-              createSafeAccessor(SafeStyleSheetProto.class))
-          .put(SafeUrlProto.getDescriptor().getFullName(), createSafeAccessor(SafeUrlProto.class))
+              createSafeProtoToSanitizedContentFactoryMethod(SafeStyleSheetProto.class))
+          .put(
+              SafeUrlProto.getDescriptor().getFullName(),
+              createSafeProtoToSanitizedContentFactoryMethod(SafeUrlProto.class))
           .put(
               TrustedResourceUrlProto.getDescriptor().getFullName(),
-              createSafeAccessor(TrustedResourceUrlProto.class))
+              createSafeProtoToSanitizedContentFactoryMethod(TrustedResourceUrlProto.class))
           .build();
 
-  private static MethodRef createSafeAccessor(Class<?> clazz) {
-    // All the safe web types have the same format for their access method names:
-    // getPrivateDoNotAccessOrElse + name + WrappedValue  where name is the prefix of the message
-    // type.
-    String simpleName = clazz.getSimpleName();
-    simpleName = simpleName.substring(0, simpleName.length() - "Proto".length());
-    return MethodRef.create(clazz, "getPrivateDoNotAccessOrElse" + simpleName + "WrappedValue")
-        .asNonNullable()
-        .asCheap();
+  private static MethodRef createSafeProtoToSanitizedContentFactoryMethod(Class<?> clazz) {
+    return MethodRef.create(SanitizedContents.class, "from" + clazz.getSimpleName(), clazz)
+        .asNonNullable();
   }
 
   private static final ImmutableMap<String, MethodRef> SANITIZED_CONTENT_TO_PROTO =
@@ -380,9 +382,8 @@ final class ProtoUtils {
           return messageToSoyExpression(field);
         case BYTE_STRING:
           return byteStringToBase64String(field);
-        default:
-          throw new AssertionError("unsupported field type: " + descriptor);
       }
+      throw new AssertionError("unsupported field type: " + descriptor);
     }
 
     private SoyExpression handleExtension(final SoyExpression typedBaseExpr) {
@@ -477,13 +478,13 @@ final class ProtoUtils {
         case STRING:
           return SoyExpression.forString(field.checkedCast(String.class));
         case MESSAGE:
-          return messageToSoyExpression(field);
+          Type javaType = SoyRuntimeType.protoType(descriptor.getMessageType());
+          return messageToSoyExpression(field.checkedCast(javaType));
         case BYTE_STRING:
           // Current tofu support for ByteString is to base64 encode it.
           return byteStringToBase64String(field.checkedCast(ByteString.class));
-        default:
-          throw new AssertionError("unsupported field type: " + descriptor);
       }
+      throw new AssertionError("unsupported field type: " + descriptor);
     }
 
     private SoyExpression byteStringToBase64String(Expression byteString) {
@@ -511,20 +512,12 @@ final class ProtoUtils {
       if (node.getType().getKind() == SoyType.Kind.PROTO) {
         SoyProtoType fieldProtoType = (SoyProtoType) node.getType();
         SoyRuntimeType protoRuntimeType = SoyRuntimeType.getUnboxedType(fieldProtoType).get();
-        return SoyExpression.forProto(
-            protoRuntimeType,
-            // cast needed for extensions
-            field.checkedCast(protoRuntimeType.runtimeType()));
+        return SoyExpression.forProto(protoRuntimeType, field);
       } else {
         // All other are special sanitized types
-        SanitizedContentKind kind = ((SanitizedType) node.getType()).getContentKind();
         Descriptor messageType = descriptor.getMessageType();
-        MethodRef methodRef = SAFE_PROTO_TO_ACCESSOR.get(messageType.getFullName());
-        return SoyExpression.forSanitizedString(
-            field
-                .checkedCast(methodRef.owner().type()) // cast needed for extensions
-                .invoke(methodRef),
-            kind);
+        MethodRef fromProtoMethod = SAFE_PROTO_TO_SANITIZED_CONTENT.get(messageType.getFullName());
+        return SoyExpression.forSoyValue(node.getType(), fromProtoMethod.invoke(field));
       }
     }
 
@@ -559,15 +552,15 @@ final class ProtoUtils {
    */
   static SoyExpression createProto(
       ProtoInitNode node,
-      List<SoyExpression> args,
+      Function<ExprNode, SoyExpression> compilerFunction,
       Supplier<? extends ExpressionDetacher> detacher,
       TemplateVariableManager varManager) {
-    return new ProtoInitGenerator(node, args, detacher, varManager).generate();
+    return new ProtoInitGenerator(node, compilerFunction, detacher, varManager).generate();
   }
 
   private static final class ProtoInitGenerator {
     private final ProtoInitNode node;
-    private final List<SoyExpression> args;
+    private final Function<ExprNode, SoyExpression> compilerFunction;
     private final Supplier<? extends ExpressionDetacher> detacher;
     private final TemplateVariableManager varManager;
 
@@ -576,11 +569,11 @@ final class ProtoUtils {
 
     ProtoInitGenerator(
         ProtoInitNode node,
-        List<SoyExpression> args,
+        Function<ExprNode, SoyExpression> compilerFunction,
         Supplier<? extends ExpressionDetacher> detacher,
         TemplateVariableManager varManager) {
       this.node = node;
-      this.args = args;
+      this.compilerFunction = compilerFunction;
       this.detacher = detacher;
       this.varManager = varManager;
 
@@ -588,9 +581,13 @@ final class ProtoUtils {
       this.descriptor = protoType.getDescriptor();
     }
 
+    private SoyExpression compile(ExprNode expr) {
+      return compilerFunction.apply(expr);
+    }
+
     SoyExpression generate() {
       // For cases with no field assignments, return proto.defaultInstance().
-      if (args.isEmpty()) {
+      if (node.numChildren() == 0) {
         final Expression defaultInstance = getDefaultInstanceMethod(descriptor).invoke();
         return SoyExpression.forProto(
             SoyRuntimeType.getUnboxedType(protoType).get(), defaultInstance);
@@ -620,18 +617,18 @@ final class ProtoUtils {
 
     private ImmutableList<Statement> getFieldSetters() {
       ImmutableList.Builder<Statement> setters = ImmutableList.builder();
-      for (int i = 0; i < args.size(); i++) {
+      for (int i = 0; i < node.numChildren(); i++) {
         FieldDescriptor field = protoType.getFieldDescriptor(node.getParamName(i).identifier());
-        SoyExpression baseArg = args.get(i);
+        ExprNode baseArg = node.getChild(i);
 
         Statement setter;
         if (field.isRepeated()) {
           setter = handleRepeated(baseArg, field);
         } else {
           if (field.isExtension()) {
-            setter = handleExtension(baseArg, field);
+            setter = handleExtension(compile(baseArg), field);
           } else {
-            setter = handleNormalSetter(baseArg, field);
+            setter = handleNormalSetter(compile(baseArg), field);
           }
         }
         setters.add(setter);
@@ -754,7 +751,7 @@ final class ProtoUtils {
 
       // Convert the soy value to java type
 
-      // CheckProtoInitCallsPass already enforces that the value is not nullable. If the value is
+      // ResolveExpressionTypesPass already enforces that the value is not nullable. If the value is
       // null, it reports a type mismatch error.
       SoyExpression mapValue =
           SoyExpression.forSoyValue(valueType, getAndResolveMapValue).asNonNullable();
@@ -793,13 +790,40 @@ final class ProtoUtils {
       };
     }
 
-    private Statement handleRepeated(final SoyExpression baseArg, FieldDescriptor field) {
+    private Statement handleRepeated(ExprNode argNode, FieldDescriptor field) {
+      if (argNode.getKind() == ExprNode.Kind.LIST_LITERAL_NODE) {
+        checkState(!field.isMapField());
+        List<Statement> additions = new ArrayList<>();
+        ListLiteralNode list = (ListLiteralNode) argNode;
+        for (ExprNode element : list.getChildren()) {
+          // it is an error to assign a null list element, so just assert non-null so that it will
+          // fail with an NPE if it happens to be null
+          SoyExpression expression = compile(element).asNonNullable();
+          additions.add(
+              field.isExtension()
+                  ? handleExtension(expression, field)
+                  : handleNormalSetter(expression, field));
+        }
+        return Statement.concat(additions);
+      }
+      if (argNode.getKind() == ExprNode.Kind.MAP_LITERAL_NODE) {
+        checkState(field.isMapField());
+        List<Statement> puts = new ArrayList<>();
+        MapLiteralNode map = (MapLiteralNode) argNode;
+        for (int i = 0; i < map.numChildren(); i += 2) {
+          SoyExpression key = compile(map.getChild(i));
+          SoyExpression value = compile(map.getChild(i + 1));
+          puts.add(handleMapSetter(key, value, field));
+        }
+        return Statement.concat(puts);
+      }
+
+      final SoyExpression baseArg = compile(argNode);
       // If the list arg is definitely an empty list/map, do nothing
       if (baseArg.soyType().equals(ListType.EMPTY_LIST)
           || baseArg.soyType().equals(MapType.EMPTY_MAP)) {
         return Statement.NULL_STATEMENT;
       }
-
       if (baseArg.isNonNullable()) {
         return field.isMapField()
             ? handleMapSetterNotNull(baseArg, field)
@@ -847,7 +871,7 @@ final class ProtoUtils {
       Preconditions.checkArgument(listArg.isNonNullable());
 
       // Unbox listArg as List<SoyValueProvider> and wait until all items are done
-      SoyExpression unboxed = listArg.unboxAs(List.class);
+      SoyExpression unboxed = listArg.unboxAsList();
       Expression resolved = detacher.get().resolveSoyValueProviderList(unboxed);
 
       // Enter new scope
@@ -1019,9 +1043,8 @@ final class ProtoUtils {
             throw new IllegalStateException("SanitizedContent objects shouldn't be unboxed");
           }
           return Message.class;
-        default:
-          throw new AssertionError("unsupported field type: " + field);
       }
+          throw new AssertionError("unsupported field type: " + field);
     }
 
     /**
@@ -1078,8 +1101,6 @@ final class ProtoUtils {
             getForNumberMethod(field.getEnumType()).invokeUnchecked(cb);
           }
           return;
-        default:
-          throw new AssertionError("unsupported field type: " + field);
       }
       if (field.isExtension()) {
         // primitive extensions need to be boxed since the api is generic
@@ -1108,7 +1129,7 @@ final class ProtoUtils {
     // TODO(user): Consider consolidating all the safe proto references to a single place.
     private static boolean isSafeProto(FieldDescriptor field) {
       return field.getJavaType() == JavaType.MESSAGE
-          && SAFE_PROTO_TO_ACCESSOR.containsKey(field.getMessageType().getFullName());
+          && SAFE_PROTO_TO_SANITIZED_CONTENT.containsKey(field.getMessageType().getFullName());
     }
   }
 
@@ -1160,9 +1181,8 @@ final class ProtoUtils {
         return TypeInfo.create(JavaQualifiedNames.getClassName(field.getMessageType())).type();
       case STRING:
         return STRING_TYPE;
-      default:
-        throw new AssertionError("unexpected type");
     }
+        throw new AssertionError("unexpected type");
   }
 
   /** Returns the {@link MethodRef} for the generated getter method. */

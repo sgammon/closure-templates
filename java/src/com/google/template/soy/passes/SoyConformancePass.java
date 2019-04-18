@@ -23,20 +23,13 @@ import com.google.template.soy.error.ErrorReporter;
 import com.google.template.soy.soytree.SoyFileNode;
 
 /** A compiler pass to run {@link SoyConformance}. */
-final class SoyConformancePass extends CompilerFilePass {
+public final class SoyConformancePass extends CompilerFilePass {
   private final SoyConformance conformance;
   private final ErrorReporter errorReporter;
 
   SoyConformancePass(ValidatedConformanceConfig conformanceConfig, ErrorReporter errorReporter) {
     this.conformance = SoyConformance.create(conformanceConfig);
     this.errorReporter = errorReporter;
-  }
-
-  @Override
-  public boolean shouldRunOnDepsAndIndirectDeps() {
-    // TODO(b/74256690): This is necessary to ensure correctness but unfortunate. Long term plan is
-    // to kick conformance out of the compiler.
-    return true;
   }
 
   @Override

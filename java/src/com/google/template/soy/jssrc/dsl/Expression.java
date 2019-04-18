@@ -17,20 +17,20 @@ package com.google.template.soy.jssrc.dsl;
 
 import static com.google.common.base.Preconditions.checkArgument;
 
+import com.google.common.base.Optional;
 import com.google.common.base.Preconditions;
 import com.google.common.base.Splitter;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Iterables;
 import com.google.errorprone.annotations.Immutable;
-import com.google.template.soy.base.internal.BaseUtils;
-import com.google.template.soy.base.internal.QuoteStyle;
 import com.google.template.soy.exprtree.IntegerNode;
 import com.google.template.soy.exprtree.Operator;
 import com.google.template.soy.exprtree.Operator.Associativity;
 import com.google.template.soy.jssrc.restricted.JsExpr;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Marker class for a chunk of code that represents a value.
@@ -48,8 +48,11 @@ public abstract class Expression extends CodeChunk {
   public static final Expression LITERAL_TRUE = id("true");
   public static final Expression LITERAL_FALSE = id("false");
   public static final Expression LITERAL_NULL = id("null");
+  public static final Expression LITERAL_UNDEFINED = id("undefined");
   public static final Expression LITERAL_EMPTY_STRING = Leaf.create("''", /* isCheap= */ true);
   public static final Expression EMPTY_OBJECT_LITERAL = Leaf.create("{}", /* isCheap= */ false);
+  public static final Expression THIS = id("this");
+
   // Do not put public static constants or methods on this class.  If you do then this can trigger
   // classloading deadlocks due to cyclic references between this class, CodeChunk and the
   // implementation class of the constant.
@@ -102,7 +105,7 @@ public abstract class Expression extends CodeChunk {
    * <p>Most dotted identifiers should be accessed via the {@link GoogRequire} api.
    */
   public static Expression dottedIdNoRequire(String dotSeparatedIdentifiers) {
-    return dottedIdWithRequires(dotSeparatedIdentifiers, ImmutableSet.<GoogRequire>of());
+    return dottedIdWithRequires(dotSeparatedIdentifiers, ImmutableSet.of());
   }
 
   static Expression dottedIdWithRequires(
@@ -130,16 +133,7 @@ public abstract class Expression extends CodeChunk {
    *     and embedded inside single quotes.
    */
   public static Expression stringLiteral(String contents) {
-    // Escape non-ASCII characters since browsers are inconsistent in how they interpret utf-8 in
-    // JS source files.
-    String escaped =
-        BaseUtils.escapeToSoyString(contents, /* shouldEscapeToAscii= */ true, QuoteStyle.SINGLE);
-
-    // </script in a JavaScript string will end the current script tag in most browsers. Escape the
-    // forward slash in the string to get around this issue.
-    escaped = escaped.replace("</script", "<\\/script");
-
-    return Leaf.create(escaped, /* isCheap= */ true);
+    return StringLiteral.create(contents);
   }
 
   /**
@@ -172,6 +166,11 @@ public abstract class Expression extends CodeChunk {
   /** Creates a code chunk representing an anonymous function literal. */
   public static Expression function(JsDoc parameters, Statement body) {
     return FunctionDeclaration.create(parameters, body);
+  }
+
+  /** Creates a code chunk representing an arrow function. */
+  public static Expression arrowFunction(JsDoc parameters, Statement body) {
+    return FunctionDeclaration.createArrowFunction(parameters, body);
   }
 
   /** Creates a code chunk representing the logical negation {@code !} of the given chunk. */
@@ -215,10 +214,20 @@ public abstract class Expression extends CodeChunk {
     return ArrayLiteral.create(ImmutableList.copyOf(elements));
   }
 
-  /** Creates a code chunk representing a javascript map literal. */
-  public static Expression objectLiteral(
-      Iterable<? extends Expression> keys, Iterable<? extends Expression> values) {
-    return ObjectLiteral.create(ImmutableList.copyOf(keys), ImmutableList.copyOf(values));
+  /**
+   * Creates a code chunk representing a javascript map literal: {@code {key1: value1, key2:
+   * value2}}
+   */
+  public static Expression objectLiteral(Map<String, Expression> object) {
+    return ObjectLiteral.create(object);
+  }
+
+  /**
+   * Creates a code chunk representing a javascript map literal, where the keys are quoted: {@code
+   * {'key1': value1, 'key2': value2}}
+   */
+  public static Expression objectLiteralWithQuotedKeys(Map<String, Expression> object) {
+    return ObjectLiteral.createWithQuotedKeys(object);
   }
 
   /**
@@ -238,6 +247,11 @@ public abstract class Expression extends CodeChunk {
   /** Formats this expression as a statement. */
   public final Statement asStatement() {
     return ExpressionStatement.of(this);
+  }
+
+  /** Formats this expression as a statement with JsDoc. */
+  public final Statement asStatement(JsDoc jsDoc) {
+    return ExpressionStatement.of(this, jsDoc);
   }
 
   public final Expression plus(Expression rhs) {
@@ -268,6 +282,11 @@ public abstract class Expression extends CodeChunk {
   public final Expression tripleEquals(Expression rhs) {
     return BinaryOperation.create(
         "===", Operator.EQUAL.getPrecedence(), Operator.EQUAL.getAssociativity(), this, rhs);
+  }
+
+  public final Expression tripleNotEquals(Expression rhs) {
+    return BinaryOperation.create(
+        "!==", Operator.EQUAL.getPrecedence(), Operator.EQUAL.getAssociativity(), this, rhs);
   }
 
   public final Expression doubleEqualsNull() {
@@ -325,6 +344,14 @@ public abstract class Expression extends CodeChunk {
 
   public final Expression call(Iterable<? extends Expression> args) {
     return Call.create(this, ImmutableList.copyOf(args));
+  }
+
+  public final Expression castAs(String typeExpression) {
+    return Cast.create(this, typeExpression);
+  }
+
+  public final Expression castAs(String typeExpression, ImmutableSet<GoogRequire> googRequires) {
+    return Cast.create(this, typeExpression, googRequires);
   }
 
   public final Expression instanceOf(Expression identifier) {
@@ -416,5 +443,10 @@ public abstract class Expression extends CodeChunk {
    */
   public boolean isCheap() {
     return false;
+  }
+
+  /** Returns the string literal value of this Expression if it is a string literal. */
+  public Optional<String> asStringLiteral() {
+    return Optional.absent();
   }
 }

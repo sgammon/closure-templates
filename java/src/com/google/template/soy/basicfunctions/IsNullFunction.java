@@ -16,22 +16,21 @@
 
 package com.google.template.soy.basicfunctions;
 
-import com.google.common.collect.ImmutableList;
-import com.google.template.soy.exprtree.Operator;
-import com.google.template.soy.jssrc.dsl.SoyJsPluginUtils;
-import com.google.template.soy.jssrc.restricted.JsExpr;
-import com.google.template.soy.jssrc.restricted.SoyJsSrcFunction;
 import com.google.template.soy.plugin.java.restricted.JavaPluginContext;
 import com.google.template.soy.plugin.java.restricted.JavaValue;
 import com.google.template.soy.plugin.java.restricted.JavaValueFactory;
 import com.google.template.soy.plugin.java.restricted.SoyJavaSourceFunction;
-import com.google.template.soy.pysrc.restricted.PyExpr;
-import com.google.template.soy.pysrc.restricted.PyExprUtils;
-import com.google.template.soy.pysrc.restricted.SoyPySrcFunction;
+import com.google.template.soy.plugin.javascript.restricted.JavaScriptPluginContext;
+import com.google.template.soy.plugin.javascript.restricted.JavaScriptValue;
+import com.google.template.soy.plugin.javascript.restricted.JavaScriptValueFactory;
+import com.google.template.soy.plugin.javascript.restricted.SoyJavaScriptSourceFunction;
+import com.google.template.soy.plugin.python.restricted.PythonPluginContext;
+import com.google.template.soy.plugin.python.restricted.PythonValue;
+import com.google.template.soy.plugin.python.restricted.PythonValueFactory;
+import com.google.template.soy.plugin.python.restricted.SoyPythonSourceFunction;
 import com.google.template.soy.shared.restricted.Signature;
 import com.google.template.soy.shared.restricted.SoyFunctionSignature;
 import com.google.template.soy.shared.restricted.SoyPureFunction;
-import com.google.template.soy.shared.restricted.TypedSoyFunction;
 import java.util.List;
 
 /** Soy function that checks whether its argument is null. */
@@ -39,24 +38,22 @@ import java.util.List;
     name = "isNull",
     value =
         @Signature(
-            // TODO(b/70946095): should return bool
-            returnType = "?",
+            returnType = "bool",
             parameterTypes = {"any"}))
 @SoyPureFunction
-final class IsNullFunction extends TypedSoyFunction
-    implements SoyJavaSourceFunction, SoyJsSrcFunction, SoyPySrcFunction {
+final class IsNullFunction
+    implements SoyJavaSourceFunction, SoyJavaScriptSourceFunction, SoyPythonSourceFunction {
 
   @Override
-  public JsExpr computeForJsSrc(List<JsExpr> args) {
-    JsExpr arg = args.get(0);
-    JsExpr nullJsExpr = new JsExpr("null", Integer.MAX_VALUE);
-    return SoyJsPluginUtils.genJsExprUsingSoySyntax(
-        Operator.EQUAL, ImmutableList.of(arg, nullJsExpr));
+  public JavaScriptValue applyForJavaScriptSource(
+      JavaScriptValueFactory factory, List<JavaScriptValue> args, JavaScriptPluginContext context) {
+    return args.get(0).isNull();
   }
 
   @Override
-  public PyExpr computeForPySrc(List<PyExpr> args) {
-    return PyExprUtils.genPyNullCheck(args.get(0));
+  public PythonValue applyForPythonSource(
+      PythonValueFactory factory, List<PythonValue> args, PythonPluginContext context) {
+    return args.get(0).isNull();
   }
 
   @Override

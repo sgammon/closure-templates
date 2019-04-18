@@ -18,6 +18,7 @@ package com.google.template.soy.types;
 
 import com.google.common.base.Ascii;
 import com.google.template.soy.base.internal.SanitizedContentKind;
+import com.google.template.soy.soytree.SoyTypeP;
 
 /**
  * Implementation of types for sanitized strings, that is strings that are produced by templates
@@ -46,7 +47,7 @@ public abstract class SanitizedType extends PrimitiveType {
         return AttributesType.getInstance();
 
       case CSS:
-        return CssType.getInstance();
+        return StyleType.getInstance();
 
       case HTML:
         return HtmlType.getInstance();
@@ -62,10 +63,8 @@ public abstract class SanitizedType extends PrimitiveType {
 
       case TEXT:
         return StringType.getInstance();
-
-      default:
-        throw new AssertionError("unexpected content kind " + contentKind);
     }
+    throw new AssertionError(contentKind);
   }
 
   // -----------------------------------------------------------------------------------------------
@@ -87,6 +86,11 @@ public abstract class SanitizedType extends PrimitiveType {
     @Override
     public SanitizedContentKind getContentKind() {
       return SanitizedContentKind.HTML;
+    }
+
+    @Override
+    void doToProto(SoyTypeP.Builder builder) {
+      builder.setPrimitive(SoyTypeP.PrimitiveTypeP.HTML);
     }
 
     /** Return the single instance of this type. */
@@ -113,6 +117,11 @@ public abstract class SanitizedType extends PrimitiveType {
       return SanitizedContentKind.ATTRIBUTES;
     }
 
+    @Override
+    void doToProto(SoyTypeP.Builder builder) {
+      builder.setPrimitive(SoyTypeP.PrimitiveTypeP.ATTRIBUTES);
+    }
+
     /** Return the single instance of this type. */
     public static AttributesType getInstance() {
       return INSTANCE;
@@ -135,6 +144,11 @@ public abstract class SanitizedType extends PrimitiveType {
     @Override
     public SanitizedContentKind getContentKind() {
       return SanitizedContentKind.URI;
+    }
+
+    @Override
+    void doToProto(SoyTypeP.Builder builder) {
+      builder.setPrimitive(SoyTypeP.PrimitiveTypeP.URI);
     }
 
     /** Return the single instance of this type. */
@@ -161,19 +175,24 @@ public abstract class SanitizedType extends PrimitiveType {
       return SanitizedContentKind.TRUSTED_RESOURCE_URI;
     }
 
+    @Override
+    void doToProto(SoyTypeP.Builder builder) {
+      builder.setPrimitive(SoyTypeP.PrimitiveTypeP.TRUSTED_RESOURCE_URI);
+    }
+
     /** Return the single instance of this type. */
     public static TrustedResourceUriType getInstance() {
       return INSTANCE;
     }
   }
 
-  /** Type produced by templates whose kind is "css". */
-  public static final class CssType extends SanitizedType {
+  /** Type produced by templates whose kind is "style". */
+  public static final class StyleType extends SanitizedType {
 
-    private static final CssType INSTANCE = new CssType();
+    private static final StyleType INSTANCE = new StyleType();
 
     // Not constructible - use getInstance().
-    private CssType() {}
+    private StyleType() {}
 
     @Override
     public Kind getKind() {
@@ -185,8 +204,13 @@ public abstract class SanitizedType extends PrimitiveType {
       return SanitizedContentKind.CSS;
     }
 
+    @Override
+    void doToProto(SoyTypeP.Builder builder) {
+      builder.setPrimitive(SoyTypeP.PrimitiveTypeP.CSS);
+    }
+
     /** Return the single instance of this type. */
-    public static CssType getInstance() {
+    public static StyleType getInstance() {
       return INSTANCE;
     }
   }
@@ -207,6 +231,11 @@ public abstract class SanitizedType extends PrimitiveType {
     @Override
     public SanitizedContentKind getContentKind() {
       return SanitizedContentKind.JS;
+    }
+
+    @Override
+    void doToProto(SoyTypeP.Builder builder) {
+      builder.setPrimitive(SoyTypeP.PrimitiveTypeP.JS);
     }
 
     /** Return the single instance of this type. */

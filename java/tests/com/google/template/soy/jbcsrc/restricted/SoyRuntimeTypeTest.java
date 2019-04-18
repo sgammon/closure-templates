@@ -74,7 +74,7 @@ public class SoyRuntimeTypeTest {
       }
       assertThat(SanitizedType.getTypeForContentKind(kind))
           .isBoxedAs(SanitizedContent.class)
-          .isUnboxedAs(String.class);
+          .isNotUnboxable();
     }
     assertThat(
             new SoyProtoType(
@@ -103,17 +103,14 @@ public class SoyRuntimeTypeTest {
     assertThat(
             UnionType.of(SanitizedType.HtmlType.getInstance(), SanitizedType.JsType.getInstance()))
         .isBoxedAs(SanitizedContent.class)
-        .isUnboxedAs(String.class);
+        .isNotUnboxable();
   }
 
   static SoyRuntimeTypeSubject assertThat(SoyType type) {
-    return Truth.assertAbout(SoyRuntimeTypeSubject.FACTORY).that(type);
+    return Truth.assertAbout(SoyRuntimeTypeSubject::new).that(type);
   }
 
   private static final class SoyRuntimeTypeSubject extends Subject<SoyRuntimeTypeSubject, SoyType> {
-    private static final Subject.Factory<SoyRuntimeTypeSubject, SoyType> FACTORY =
-        SoyRuntimeTypeSubject::new;
-
     protected SoyRuntimeTypeSubject(FailureMetadata metadata, SoyType actual) {
       super(metadata, actual);
     }

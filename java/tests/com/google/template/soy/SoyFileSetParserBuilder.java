@@ -22,13 +22,14 @@ import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Lists;
 import com.google.template.soy.SoyFileSetParser.ParseResult;
-import com.google.template.soy.base.internal.SoyFileKind;
 import com.google.template.soy.base.internal.SoyFileSupplier;
-import com.google.template.soy.basetree.SyntaxVersion;
 import com.google.template.soy.conformance.ValidatedConformanceConfig;
 import com.google.template.soy.error.ErrorReporter;
 import com.google.template.soy.logging.ValidatedLoggingConfig;
+import com.google.template.soy.passes.CompilerPass;
 import com.google.template.soy.passes.PassManager;
+import com.google.template.soy.passes.PassManager.PassContinuationRule;
+import com.google.template.soy.passes.PluginResolver;
 import com.google.template.soy.plugin.restricted.SoySourceFunction;
 import com.google.template.soy.shared.SharedTestUtils;
 import com.google.template.soy.shared.SoyAstCache;
@@ -38,7 +39,6 @@ import com.google.template.soy.shared.internal.SoyScopedData;
 import com.google.template.soy.shared.internal.SoySimpleScope;
 import com.google.template.soy.shared.restricted.SoyFunction;
 import com.google.template.soy.shared.restricted.SoyPrintDirective;
-import com.google.template.soy.soyparse.PluginResolver;
 import com.google.template.soy.types.SoyTypeRegistry;
 import java.util.Arrays;
 import java.util.LinkedHashMap;
@@ -58,6 +58,7 @@ public final class SoyFileSetParserBuilder {
   @Nullable private SoyAstCache astCache = null;
   private ErrorReporter errorReporter = ErrorReporter.exploding(); // See #parse for discussion.
   private boolean allowUnboundGlobals;
+  private boolean allowV1Expression;
   private final SoyScopedData scopedData;
   private ImmutableMap<String, SoyFunction> soyFunctionMap;
   private ImmutableMap<String, SoyPrintDirective> soyPrintDirectiveMap;
@@ -67,13 +68,14 @@ public final class SoyFileSetParserBuilder {
   private ValidatedConformanceConfig conformanceConfig = ValidatedConformanceConfig.EMPTY;
   private ValidatedLoggingConfig loggingConfig = ValidatedLoggingConfig.EMPTY;
   private boolean desugarHtmlNodes = true;
-  // TODO(lukes): disabled for compatibility with unit tests.  fix tests relying on the
+  // TODO(lukes): disabled for compatibility with unit tests.  Fix tests relying on the
   // escaper not running and enable by default.  This configuration bit only really exists
-  // for incrementaldomsrc, not tests
+  // for incrementaldomsrc, not tests.
   private boolean runAutoescaper = false;
   // By default, do not modify the AST to add the HTML comments, since many unit tests depend on
   // the order of the nodes in the AST.
   private boolean addHtmlAttributesForDebugging = false;
+  private final PassManager.Builder passManager = new PassManager.Builder();
 
   /**
    * Returns a builder that gets its Soy inputs from the given strings, treating each string as the
@@ -128,13 +130,7 @@ public final class SoyFileSetParserBuilder {
     this.scopedData = new SoySimpleScope();
     this.soyFunctionMap = InternalPlugins.internalLegacyFunctionMap();
     this.soyPrintDirectiveMap = InternalPlugins.internalDirectiveMap(scopedData);
-    this.sourceFunctionMap = InternalPlugins.internalFunctionMap(scopedData);
-  }
-
-  /** Sets the parser's declared syntax version. Returns this object, for chaining. */
-  public SoyFileSetParserBuilder declaredSyntaxVersion(SyntaxVersion version) {
-    this.options.setDeclaredSyntaxVersionName(version.name);
-    return this;
+    this.sourceFunctionMap = InternalPlugins.internalFunctionMap();
   }
 
   /** Enable experiments. Returns this object, for chaining. */
@@ -208,6 +204,11 @@ public final class SoyFileSetParserBuilder {
     return this;
   }
 
+  public SoyFileSetParserBuilder allowV1Expression(boolean allowV1Expression) {
+    this.allowV1Expression = allowV1Expression;
+    return this;
+  }
+
   public SoyFileSetParserBuilder setConformanceConfig(ValidatedConformanceConfig config) {
     this.conformanceConfig = checkNotNull(config);
     return this;
@@ -246,10 +247,21 @@ public final class SoyFileSetParserBuilder {
       String soyFileContent = soyFileContents[i];
       // Names are now required to be unique in a SoyFileSet. Use one-based indexing.
       String filePath = (i == 0) ? "no-path" : ("no-path-" + (i + 1));
-      soyFileSuppliers.add(
-          SoyFileSupplier.Factory.create(soyFileContent, SoyFileKind.SRC, filePath));
+      soyFileSuppliers.add(SoyFileSupplier.Factory.create(soyFileContent, filePath));
     }
     return soyFileSuppliers;
+  }
+
+  /**
+   * Tells the compiler to stop either before or after the named pass.
+   *
+   * <p>Tests can use this to build a parse tree using up to a certain pass. See, for example {@link
+   * com.google.template.soy.passes.htmlmatcher.HtmlMatcherGraphTest}.
+   */
+  public SoyFileSetParserBuilder addPassContinuationRule(
+      Class<? extends CompilerPass> pass, PassContinuationRule rule) {
+    passManager.addPassContinuationRule(pass, rule);
+    return this;
   }
 
   /**
@@ -266,24 +278,14 @@ public final class SoyFileSetParserBuilder {
   }
 
   public SoyFileSetParser build() {
-    PassManager.Builder passManager =
-        new PassManager.Builder()
-            .setSoyPrintDirectiveMap(soyPrintDirectiveMap)
-            .setErrorReporter(errorReporter)
-            .setTypeRegistry(typeRegistry)
-            .desugarHtmlNodes(desugarHtmlNodes)
-            .setGeneralOptions(options)
-            .setConformanceConfig(conformanceConfig)
-            .setAutoescaperEnabled(runAutoescaper)
-            .addHtmlAttributesForDebugging(addHtmlAttributesForDebugging)
-            .setLoggingConfig(loggingConfig);
-    if (allowUnboundGlobals) {
-      passManager.allowUnknownGlobals();
-    }
-    return SoyFileSetParser.newBuilder()
-        .setCache(astCache)
-        .setSoyFileSuppliers(soyFileSuppliers)
+    // Add the remaining PassManager configuration bits.
+    passManager
+        .setSoyPrintDirectiveMap(soyPrintDirectiveMap)
+        .setErrorReporter(errorReporter)
         .setTypeRegistry(typeRegistry)
+        .desugarHtmlNodes(desugarHtmlNodes)
+        .setGeneralOptions(options)
+        .setConformanceConfig(conformanceConfig)
         .setPluginResolver(
             new PluginResolver(
                 PluginResolver.Mode.REQUIRE_DEFINITIONS,
@@ -291,9 +293,22 @@ public final class SoyFileSetParserBuilder {
                 ImmutableMap.copyOf(soyFunctionMap),
                 sourceFunctionMap,
                 errorReporter))
+        .setAutoescaperEnabled(runAutoescaper)
+        .addHtmlAttributesForDebugging(addHtmlAttributesForDebugging)
+        .setLoggingConfig(loggingConfig);
+    if (allowUnboundGlobals) {
+      passManager.allowUnknownGlobals();
+    }
+    if (allowV1Expression) {
+      passManager.allowV1Expression();
+    }
+    return SoyFileSetParser.newBuilder()
+        .setCache(astCache)
+        .setSoyFileSuppliers(soyFileSuppliers)
+        .setCompilationUnits(ImmutableList.of())
+        .setTypeRegistry(typeRegistry)
         .setPassManager(passManager.build())
         .setErrorReporter(errorReporter)
-        .setGeneralOptions(options)
         .build();
   }
 }

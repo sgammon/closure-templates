@@ -95,7 +95,7 @@ public class FeaturesUsage {
    * @throws IOException If there is an error reading the input files.
    */
   public static void main(String[] args) throws IOException {
-    (new FeaturesUsage()).execMain(args);
+    new FeaturesUsage().execMain(args);
   }
 
   private void execMain(String[] args) throws IOException {
@@ -269,7 +269,7 @@ public class FeaturesUsage {
 
     writeExampleHeader("demoExpressions");
     ImmutableList<ImmutableMap<String, Object>> students =
-        ImmutableList.<ImmutableMap<String, Object>>of(
+        ImmutableList.of(
             ImmutableMap.of("name", "Rob", "major", "Physics", "year", 1999),
             ImmutableMap.of("name", "Sha", "major", "Finance", "year", 1980),
             ImmutableMap.of("name", "Tim", "major", "Engineering", "year", 2005),

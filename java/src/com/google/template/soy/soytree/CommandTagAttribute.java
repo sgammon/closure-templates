@@ -61,8 +61,6 @@ public final class CommandTagAttribute {
       SoyErrorKind.of("Expected a single expression for a {0} attribute.");
   static final SoyErrorKind NAMESPACE_STRICTHTML_ATTRIBUTE =
       SoyErrorKind.of("''stricthtml=\"false\"'' can only be set on individual templates.");
-  static final SoyErrorKind NAMESPACE_AUTOESCAPE_ATTRIBUTE =
-      SoyErrorKind.of("''autoescape'' can only be set on individual templates.");
   static final SoyErrorKind EXPLICIT_DEFAULT_ATTRIBUTE =
       SoyErrorKind.of("''{0}=\"{1}\"'' is the default, no need to set it.");
 
@@ -137,6 +135,10 @@ public final class CommandTagAttribute {
     return valueLocation;
   }
 
+  public QuoteStyle getQuoteStyle() {
+    return quoteStyle;
+  }
+
   public int valueAsInteger(ErrorReporter errorReporter, int defaultValue) {
     checkState(valueExprList == null);
 
@@ -185,26 +187,7 @@ public final class CommandTagAttribute {
         hasError = true;
       }
     }
-    return hasError ? ImmutableList.<String>of() : ImmutableList.copyOf(namespaces);
-  }
-
-  AutoescapeMode valueAsAutoescapeMode(ErrorReporter errorReporter) {
-    checkState(valueExprList == null);
-
-    AutoescapeMode mode = AutoescapeMode.forAttributeValue(value);
-    if (mode == AutoescapeMode.STRICT) {
-      errorReporter.report(valueLocation, EXPLICIT_DEFAULT_ATTRIBUTE, "autoescape", "strict");
-    } else if (mode == null) {
-      mode = AutoescapeMode.STRICT; // default for unparsed
-      errorReporter.report(
-          valueLocation,
-          INVALID_ATTRIBUTE_LIST,
-          key.identifier(),
-          ImmutableList.of(
-              AutoescapeMode.CONTEXTUAL.getAttributeValue(),
-              AutoescapeMode.NONCONTEXTUAL.getAttributeValue()));
-    }
-    return mode;
+    return hasError ? ImmutableList.of() : ImmutableList.copyOf(namespaces);
   }
 
   @Nullable
@@ -226,6 +209,29 @@ public final class CommandTagAttribute {
           Visibility.PRIVATE.getAttributeValue());
     }
     return visibility;
+  }
+
+  @Nullable
+  WhitespaceMode valueAsWhitespaceMode(ErrorReporter errorReporter) {
+    checkState(valueExprList == null);
+
+    WhitespaceMode whitespaceMode = WhitespaceMode.forAttributeValue(value);
+
+    if (whitespaceMode == WhitespaceMode.JOIN) {
+      errorReporter.report(
+          valueLocation,
+          EXPLICIT_DEFAULT_ATTRIBUTE,
+          key.identifier(),
+          WhitespaceMode.JOIN.getAttributeValue());
+    } else if (whitespaceMode == null) {
+      errorReporter.report(
+          valueLocation,
+          INVALID_ATTRIBUTE_LIST,
+          key.identifier(),
+          WhitespaceMode.getAttributeValues());
+    }
+
+    return whitespaceMode;
   }
 
   @Nullable

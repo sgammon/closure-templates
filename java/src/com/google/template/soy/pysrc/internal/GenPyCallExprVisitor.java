@@ -37,8 +37,10 @@ import com.google.template.soy.soytree.CallParamNode;
 import com.google.template.soy.soytree.CallParamValueNode;
 import com.google.template.soy.soytree.SoyFileNode;
 import com.google.template.soy.soytree.TemplateBasicNode;
+import com.google.template.soy.soytree.TemplateElementNode;
 import com.google.template.soy.soytree.TemplateNode;
 import com.google.template.soy.soytree.Visibility;
+import com.google.template.soy.soytree.defn.TemplateParam;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import javax.annotation.Nullable;
@@ -50,6 +52,7 @@ import javax.annotation.Nullable;
 final class GenPyCallExprVisitor extends AbstractReturningSoyNodeVisitor<PyExpr> {
 
   private final IsComputableAsPyExprVisitor isComputableAsPyExprVisitor;
+  private final PythonValueFactoryImpl pluginValueFactory;
 
   private final GenPyExprsVisitorFactory genPyExprsVisitorFactory;
 
@@ -58,8 +61,10 @@ final class GenPyCallExprVisitor extends AbstractReturningSoyNodeVisitor<PyExpr>
 
   GenPyCallExprVisitor(
       IsComputableAsPyExprVisitor isComputableAsPyExprVisitor,
+      PythonValueFactoryImpl pluginValueFactory,
       GenPyExprsVisitorFactory genPyExprsVisitorFactory) {
     this.isComputableAsPyExprVisitor = isComputableAsPyExprVisitor;
+    this.pluginValueFactory = pluginValueFactory;
     this.genPyExprsVisitorFactory = genPyExprsVisitorFactory;
   }
 
@@ -128,7 +133,7 @@ final class GenPyCallExprVisitor extends AbstractReturningSoyNodeVisitor<PyExpr>
 
     // Build the Python expr text for the callee.
     String calleeExprText;
-    TemplateBasicNode template = getTemplateIfInSameFile(node);
+    TemplateNode template = getTemplateIfInSameFile(node);
     if (template != null) {
       // If in the same module no namespace is required.
       calleeExprText = getLocalTemplateName(template);
@@ -159,7 +164,7 @@ final class GenPyCallExprVisitor extends AbstractReturningSoyNodeVisitor<PyExpr>
     } else {
       // Case 2: Delegate call with variant expression.
       TranslateToPyExprVisitor translator =
-          new TranslateToPyExprVisitor(localVarStack, errorReporter);
+          new TranslateToPyExprVisitor(localVarStack, pluginValueFactory, errorReporter);
       variantPyExpr = translator.exec(variantSoyExpr);
     }
     String calleeExprText =
@@ -183,7 +188,7 @@ final class GenPyCallExprVisitor extends AbstractReturningSoyNodeVisitor<PyExpr>
    */
   public String genObjToPass(CallNode callNode) {
     TranslateToPyExprVisitor translator =
-        new TranslateToPyExprVisitor(localVarStack, errorReporter);
+        new TranslateToPyExprVisitor(localVarStack, pluginValueFactory, errorReporter);
 
     // Generate the expression for the original data to pass.
     String dataToPass;
@@ -193,11 +198,6 @@ final class GenPyCallExprVisitor extends AbstractReturningSoyNodeVisitor<PyExpr>
       dataToPass = translator.exec(callNode.getDataExpr()).getText();
     } else {
       dataToPass = "{}";
-    }
-
-    // Case 1: No additional params.
-    if (callNode.numChildren() == 0) {
-      return dataToPass;
     }
 
     // Build an object literal containing the additional params.
@@ -235,13 +235,35 @@ final class GenPyCallExprVisitor extends AbstractReturningSoyNodeVisitor<PyExpr>
       }
     }
 
+    Map<PyExpr, PyExpr> defaultParams = new LinkedHashMap<>();
+    for (TemplateParam param : callNode.getNearestAncestor(TemplateNode.class).getParams()) {
+      if (param.hasDefault()) {
+        defaultParams.put(
+            new PyStringExpr("'" + param.name() + "'"), translator.exec(param.defaultValue()));
+      }
+    }
+
     PyExpr additionalParamsExpr = PyExprUtils.convertMapToPyExpr(additionalParams);
 
     // Cases 2 and 3: Additional params with and without original data to pass.
     if (callNode.isPassingData()) {
-      // make a shallow copy so we don't accidentally modify the param
-      dataToPass = "dict(" + dataToPass + ")";
-      return "runtime.merge_into_dict(" + dataToPass + ", " + additionalParamsExpr.getText() + ")";
+      if (callNode.numChildren() > 0) {
+        // make a shallow copy so we don't accidentally modify the param
+        dataToPass = "dict(" + dataToPass + ")";
+        dataToPass =
+            "runtime.merge_into_dict(" + dataToPass + ", " + additionalParamsExpr.getText() + ")";
+      }
+
+      if (!defaultParams.isEmpty()) {
+        // If there are default parameters, merge the data we have so far into a dict of the default
+        // parameters. This will override the parameter defaults with actual values (if there are
+        // actual values).
+        PyExpr defaultParamsExpr = PyExprUtils.convertMapToPyExpr(defaultParams);
+        dataToPass =
+            "runtime.merge_into_dict(" + defaultParamsExpr.getText() + ", " + dataToPass + ")";
+      }
+
+      return dataToPass;
     } else {
       return additionalParamsExpr.getText();
     }
@@ -268,8 +290,7 @@ final class GenPyCallExprVisitor extends AbstractReturningSoyNodeVisitor<PyExpr>
           "Autoescaping produced a bogus directive: %s",
           directive.getName());
       escapedExpr =
-          ((SoyPySrcPrintDirective) directive)
-              .applyForPySrc(escapedExpr, ImmutableList.<PyExpr>of());
+          ((SoyPySrcPrintDirective) directive).applyForPySrc(escapedExpr, ImmutableList.of());
     }
     return escapedExpr;
   }
@@ -284,12 +305,12 @@ final class GenPyCallExprVisitor extends AbstractReturningSoyNodeVisitor<PyExpr>
   }
 
   @Nullable
-  private TemplateBasicNode getTemplateIfInSameFile(CallBasicNode callBasicNode) {
+  private TemplateNode getTemplateIfInSameFile(CallBasicNode callBasicNode) {
     SoyFileNode file = callBasicNode.getNearestAncestor(SoyFileNode.class);
     for (TemplateNode template : file.getChildren()) {
-      if (template instanceof TemplateBasicNode
+      if ((template instanceof TemplateBasicNode || template instanceof TemplateElementNode)
           && template.getTemplateName().equals(callBasicNode.getCalleeName())) {
-        return (TemplateBasicNode) template;
+        return template;
       }
     }
     return null;

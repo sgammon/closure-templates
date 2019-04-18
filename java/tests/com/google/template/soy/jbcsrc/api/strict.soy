@@ -13,7 +13,7 @@
 {/template}
 
 /** hello */
-{template .hello}
+{template .hello kind="text"}
 Hello world
 {/template}
 
@@ -35,4 +35,10 @@ Hello world
       {param depth : $depth - 1/}
     {/call}
   {/if}
+{/template}
+
+{template .defaultParam}
+  {@param p : int|null = 18}
+
+  {$p}
 {/template}
