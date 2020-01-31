@@ -613,7 +613,6 @@ public final class TranslateToPyExprVisitor extends AbstractReturningExprNodeVis
    *
    * @param key an expression to be used as a key
    * @param notFoundBehavior What should happen if the key is not in the structure.
-   * @param coerceKeyToString Whether or not the key should be coerced to a string.
    */
   private static String genCodeForKeyAccess(
       String containerExpr, PyExpr key, NotFoundBehavior notFoundBehavior) {
@@ -635,6 +634,50 @@ public final class TranslateToPyExprVisitor extends AbstractReturningExprNodeVis
   }
 
   /**
+   * Generates the code for field access given the name of the field, and the container.
+   *
+   * @param containerExpr expression for the container.
+   * @param field expression for the field to access.
+   * @param notFoundBehavior what should happen if the key is not found.
+   * @return Generated code.
+   */
+  private static String genCodeForFieldAccess(
+    String containerExpr, String field, NotFoundBehavior notFoundBehavior) {
+    switch (notFoundBehavior.getType()) {
+      case RETURN_NONE:
+        return new PyFunctionExprBuilder("runtime.key_safe_data_access")
+          .addArg(new PyExpr(containerExpr, Integer.MAX_VALUE))
+          .addArg(field)
+          .build();
+
+      case THROW:
+        // regular access, like `object.field`
+        return new PyExpr(containerExpr + "." + field, Integer.MAX_VALUE).getText();
+
+      case DEFAULT_VALUE:
+        // defaulted access, like `getattr(object, 'field', 'some-default')
+        return new PyFunctionExprBuilder("getattr")
+          .addArg(containerExpr)
+          .addArg(field)
+          .addArg(notFoundBehavior.getDefaultValue())
+          .build();
+    }
+    throw new AssertionError(notFoundBehavior.getType());
+  }
+
+  /**
+   * Generates generic code for field access, given the container and the name of the
+   * field. If the field cannot be found, an exception is thrown.
+   *
+   * @param containerExpr expression for the container.
+   * @param field expression for the field to access.
+   * @return Generated code.
+   */
+  private static String genCodeForFieldAccess(String containerExpr, String field) {
+    return genCodeForFieldAccess(containerExpr, field, NotFoundBehavior.throwException());
+  }
+
+  /**
    * Generates the code for a field name access, e.g. ".foo" or "['bar']".
    *
    * @param node the field access source node
@@ -645,9 +688,8 @@ public final class TranslateToPyExprVisitor extends AbstractReturningExprNodeVis
    */
   private String genCodeForFieldAccess(
       ExprNode node, SoyType baseType, String containerExpr, String fieldName) {
-    if (baseType != null && baseType.getKind() == SoyType.Kind.PROTO) {
-      errorReporter.report(node.getSourceLocation(), PROTO_ACCESS_NOT_SUPPORTED);
-      return ".ERROR";
+    if (baseType.getKind() == Kind.PROTO) {
+      return genCodeForFieldAccess(containerExpr, fieldName);
     }
     return genCodeForLiteralKeyAccess(containerExpr, fieldName);
   }
